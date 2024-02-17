@@ -36,6 +36,7 @@ function gameDataHandler(triviaData) {
 }
 
 wsServer.on("request", request => {
+  console.log("Requests...")
     //connect
     const connection = request.accept(null, request.origin);
     connection.on("open", () => console.log("opened!"))
