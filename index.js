@@ -13,7 +13,8 @@ import websocket from "websocket";
 
 const websocketServer = websocket.server;
 const httpServer = http.createServer();
-httpServer.listen(9090, () => console.log("Listening... on 9090"));
+// TODO: below is commented out for remote server (?)
+//httpServer.listen(9090, () => console.log("Listening... on 9090"));
 
 
 //hashmap clients
@@ -41,127 +42,26 @@ wsServer.on("request", request => {
     connection.on("close", () => console.log("closed!"))
     connection.on("message", message => {
         const result = JSON.parse(message.utf8Data);
-
         // CREATE ROOM METHOD
-        // TODO: Add error code if create room fails, sever connection
         if (result.method === "createRoom") {
-          const hostId = result.clientId;
-          const roomCode = uniqueRoomCode();
-          console.log(roomCode)
-          rooms[roomCode] = {
-            "roomCode": roomCode,
-            "hostId": hostId,
-            "clients": [hostId]
-          }
-          // Send back roomCode
-          const payLoad = {
-            "method": "createRoom",
-            "roomCode": roomCode
-          }
-          clients[hostId].connection.send(JSON.stringify(payLoad));
+          createRoomHandler(result);
         }
-
         // JOIN ROOM METHOD
         if (result.method === "joinRoom") {
-          const clientId = result.clientId;
-          const clientUsername = result.clientUsername;
-          const roomCode = result.roomCode;
-          // If room found, update paramters and relevant globals
-          if (roomCode in rooms) {
-            clients[clientId].username = clientUsername;
-            rooms[roomCode].clients.push(clientId);
-            const payLoad = {
-              "method": "joinRoom",
-              "joinedClientId": clientId,
-              "joinedClientUsername": clientUsername,
-              "joinedUsernamesList": [],
-              "errMsg": ""
-            }
-            // TODO: SEND LIST OF ALL USERNAMES ON ANY CLIENT JOIN, AND ON RECONNECTS
-            rooms[roomCode].clients.forEach(clientId => {
-              clients[clientId].connection.send(JSON.stringify(payLoad));
-            })
-          }
-          else {
-            const payLoad = {
-              "method": "joinRoom",
-              "joinedClientId": "",
-              "joinedClientUsername": "",
-              "joinedUsernamesList": [],
-              "errMsg": "Room Not Found"
-            }
-            clients[clientId].connection.send(JSON.stringify(payLoad));
-            clients[clientId].connection.close(); // TODO: CONSIDER USING .CLOSE(CODE,REASON) HERE
-            delete clients[clientId];
-          }
+          joinRoomHandler(result);
         }
-
-        // NOTE: CURRENT CLIENT RECONNECT IMPLEMENTATION: client is connected to another socket
-        // but client data in clients{} and client reference in room{} persists ...
-        // Set clients[clientId (original)] = clients[tempId]
-        // delete clients[tempId]
-        // TODO/FIX: BUG ON RECONNECT WHERE
-
         // RECONNECT TO ROOM
-        if (result.method === "reconnect") { 
-          const originalClientId = result.originalClientId;
-          const tempClientId = result.tempClientId;
-          const roomCode = result.roomCode;
-          // Verify clientId<->room mapping exists, i.e. prev. client trying to reconnect
-          let recipientClientId = tempClientId;
-          // Send back response
-          // TODO: SEND BACK OTHER CLIENT DATA TO RELOAD STATS ??
-          const payLoad = {
-            "method": "reconnect",
-            "recipientClientId": recipientClientId,
-            "errMsg": "Failed to reconnect"
-          }
-          if (!(roomCode in rooms)) {
-            payLoad.errMsg = "Invalid roomcode."
-          }
-          else if (!(rooms[roomCode].clients.includes(originalClientId))) {
-            payLoad.errMsg = "Client Id not found."
-          }
-          else {
-            // Re-map new client connection to original clientId
-            // rooms map has persistent data associated with original id. Leave as-is.
-            payLoad.errMsg = "";
-            clients[originalClientId] = clients[tempClientId];
-            delete clients[tempClientId];
-            recipientClientId = originalClientId;
-            payLoad.recipientClientId = recipientClientId;
-          }
-          clients[recipientClientId].connection.send(JSON.stringify(payLoad));
+        if (result.method === "reconnect") {
+          reconnectHandler(result);
         }
-
         // SEND ANSWER METHOD
         if (result.method === "play") {
 
         }
-
         // SEND CHAT MESSAGE METHOD
-        // TODO: VERIFY USER IS IN THIS ROOM?
         if (result.method === "chat") {
-          const roomCode = result.roomCode;
-          const msgSenderId = result.clientId;
-          const msgSenderName = result.clientDisplayName; // how name should be displayed
-          const chatMsg = result.chatMsg;
-          const type = result.type;
-          const payLoad = {
-            "method": "chat",
-            //"senderId": msgSenderId,
-            "senderName": msgSenderName,
-            "chatMsg": chatMsg,
-            "type": type
-          }
-          //Loop through all non-self clients and send chat message
-          rooms[roomCode].clients.forEach(clientId => {
-            if (clientId !== msgSenderId) {
-              clients[clientId].connection.send(JSON.stringify(payLoad));
-            }
-          })
+          chatHandler(result);
         }
-
     })
     connectClientResponse(connection);
     // TODO: DELETE BELOW, TESTING WITH FORCED DISCONNECT
@@ -173,6 +73,116 @@ wsServer.on("request", request => {
 
 
 /* -------------------------- WS REQ/RES HANDLERS -------------------------- */
+
+// TODO: Add error code if create room fails, sever connection
+function createRoomHandler(result) {
+  const hostId = result.clientId;
+  const roomCode = uniqueRoomCode();
+  console.log(roomCode)
+  rooms[roomCode] = {
+    "roomCode": roomCode,
+    "hostId": hostId,
+    "clients": [hostId]
+  }
+  // Send back roomCode
+  const payLoad = {
+    "method": "createRoom",
+    "roomCode": roomCode
+  }
+  clients[hostId].connection.send(JSON.stringify(payLoad));
+}
+
+function joinRoomHandler(result) {
+  const clientId = result.clientId;
+  const clientUsername = result.clientUsername;
+  const roomCode = result.roomCode;
+  // If room found, update paramters and relevant globals
+  if (roomCode in rooms) {
+    clients[clientId].username = clientUsername;
+    rooms[roomCode].clients.push(clientId);
+    const payLoad = {
+      "method": "joinRoom",
+      "joinedClientId": clientId,
+      "joinedClientUsername": clientUsername,
+      "joinedUsernamesList": [],
+      "errMsg": ""
+    }
+    // TODO: SEND LIST OF ALL USERNAMES ON ANY CLIENT JOIN, AND ON RECONNECTS
+    rooms[roomCode].clients.forEach(clientId => {
+      clients[clientId].connection.send(JSON.stringify(payLoad));
+    })
+  }
+  else {
+    const payLoad = {
+      "method": "joinRoom",
+      "joinedClientId": "",
+      "joinedClientUsername": "",
+      "joinedUsernamesList": [],
+      "errMsg": "Room Not Found"
+    }
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+    clients[clientId].connection.close(); // TODO: CONSIDER USING .CLOSE(CODE,REASON) HERE
+    delete clients[clientId];
+  }
+}
+
+// NOTE: CURRENT CLIENT RECONNECT IMPLEMENTATION: client is connected to another socket
+// but client data in clients{} and client reference in room{} persists ...
+// Set clients[clientId (original)] = clients[tempId]
+// delete clients[tempId]
+// TODO/FIX: BUG ON RECONNECT WHERE
+function reconnectHandler(result) {
+  const originalClientId = result.originalClientId;
+  const tempClientId = result.tempClientId;
+  const roomCode = result.roomCode;
+  // Verify clientId<->room mapping exists, i.e. prev. client trying to reconnect
+  let recipientClientId = tempClientId;
+  // Send back response
+  // TODO: SEND BACK OTHER CLIENT DATA TO RELOAD STATS ??
+  const payLoad = {
+    "method": "reconnect",
+    "recipientClientId": recipientClientId,
+    "errMsg": "Failed to reconnect"
+  }
+  if (!(roomCode in rooms)) {
+    payLoad.errMsg = "Invalid roomcode."
+  }
+  else if (!(rooms[roomCode].clients.includes(originalClientId))) {
+    payLoad.errMsg = "Client Id not found."
+  }
+  else {
+    // Re-map new client connection to original clientId
+    // rooms map has persistent data associated with original id. Leave as-is.
+    payLoad.errMsg = "";
+    clients[originalClientId] = clients[tempClientId];
+    delete clients[tempClientId];
+    recipientClientId = originalClientId;
+    payLoad.recipientClientId = recipientClientId;
+  }
+  clients[recipientClientId].connection.send(JSON.stringify(payLoad));
+}
+
+// TODO: VERIFY USER IS IN THIS ROOM?
+function chatHandler(result) {
+  const roomCode = result.roomCode;
+  const msgSenderId = result.clientId;
+  const msgSenderName = result.clientDisplayName; // how name should be displayed
+  const chatMsg = result.chatMsg;
+  const type = result.type;
+  const payLoad = {
+    "method": "chat",
+    //"senderId": msgSenderId,
+    "senderName": msgSenderName,
+    "chatMsg": chatMsg,
+    "type": type
+  }
+  //Loop through all non-self clients and send chat message
+  rooms[roomCode].clients.forEach(clientId => {
+    if (clientId !== msgSenderId) {
+      clients[clientId].connection.send(JSON.stringify(payLoad));
+    }
+  })
+}
 
 function connectClientResponse(connection) {
   //generate a new clientId
