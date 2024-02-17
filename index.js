@@ -100,44 +100,38 @@ wsServer.on("request", request => {
         // but client data in clients{} and client reference in room{} persists ...
         // Set clients[clientId (original)] = clients[tempId]
         // delete clients[tempId]
+        // TODO/FIX: BUG ON RECONNECT WHERE
+
         // RECONNECT TO ROOM
-        if (result.method === "reconnect") {
+        if (result.method === "reconnect") { 
           const originalClientId = result.originalClientId;
-          console.log("Original ID: ", originalClientId)
           const tempClientId = result.tempClientId;
           const roomCode = result.roomCode;
           // Verify clientId<->room mapping exists, i.e. prev. client trying to reconnect
-          let reconnectedClientId = "";
-          let errMsg = "Failed to reconnect";
-
-          if (!(roomCode in rooms)) {
-            errMsg = "Invalid roomcode."
-          }
-          else if (!(rooms[roomCode].clients.includes(originalClientId))) {
-            errMsg = "Client Id not found."
-            console.log("Recorded IDs: ")
-            rooms[roomCode].clients.forEach(clientId => {
-              console.log(clientId)
-            })
-          }
-          else {
-            // Re-map new client connection to original clientId
-            // rooms map has persistent data associated with original id. Leave as-is.
-            errMsg = "";
-            clients[originalClientId] = clients[tempClientId];
-            delete clients[tempClientId];
-            reconnectedClientId = originalClientId;
-          }
+          let recipientClientId = tempClientId;
           // Send back response
           // TODO: SEND BACK OTHER CLIENT DATA TO RELOAD STATS ??
           const payLoad = {
             "method": "reconnect",
-            "reconnectedClientId": reconnectedClientId,
-            "errMsg": errMsg
+            "recipientClientId": recipientClientId,
+            "errMsg": "Failed to reconnect"
           }
-          clients[originalClientId].connection.send(JSON.stringify(payLoad));
-
-          console.log("Server err: ", errMsg)
+          if (!(roomCode in rooms)) {
+            payLoad.errMsg = "Invalid roomcode."
+          }
+          else if (!(rooms[roomCode].clients.includes(originalClientId))) {
+            payLoad.errMsg = "Client Id not found."
+          }
+          else {
+            // Re-map new client connection to original clientId
+            // rooms map has persistent data associated with original id. Leave as-is.
+            payLoad.errMsg = "";
+            clients[originalClientId] = clients[tempClientId];
+            delete clients[tempClientId];
+            recipientClientId = originalClientId;
+            payLoad.recipientClientId = recipientClientId;
+          }
+          clients[recipientClientId].connection.send(JSON.stringify(payLoad));
         }
 
         // SEND ANSWER METHOD
@@ -146,29 +140,39 @@ wsServer.on("request", request => {
         }
 
         // SEND CHAT MESSAGE METHOD
+        // TODO: VERIFY USER IS IN THIS ROOM?
         if (result.method === "chat") {
-          const clientId = result.clientId;
-          //const roomCode = result.roomCode;
+          const roomCode = result.roomCode;
+          const msgSenderId = result.clientId;
+          const msgSenderName = result.clientDisplayName; // how name should be displayed
           const chatMsg = result.chatMsg;
+          const type = result.type;
           const payLoad = {
             "method": "chat",
-            "senderId": clientId,
-            "chatMsg": chatMsg
+            //"senderId": msgSenderId,
+            "senderName": msgSenderName,
+            "chatMsg": chatMsg,
+            "type": type
           }
-          //Loop through all clients and send chat message TODO: remove this, use diff implementation
-          for (const [clientId, clientData] of Object.entries(clients)) {
-            clientData.connection.send(JSON.stringify(payLoad));
-          }
+          //Loop through all non-self clients and send chat message
+          rooms[roomCode].clients.forEach(clientId => {
+            if (clientId !== msgSenderId) {
+              clients[clientId].connection.send(JSON.stringify(payLoad));
+            }
+          })
         }
 
     })
     connectClientResponse(connection);
     // TODO: DELETE BELOW, TESTING WITH FORCED DISCONNECT
-    setTimeout(() => {
+    /*setTimeout(() => {
       connection.close();
-    }, 2000);
+    }, 2000);*/
 })
 
+
+
+/* -------------------------- WS REQ/RES HANDLERS -------------------------- */
 
 function connectClientResponse(connection) {
   //generate a new clientId
@@ -193,6 +197,7 @@ function connectClientResponse(connection) {
 
 
 
+/* ----------------- GENERATE CLIENT ID, ROOM CODE HELPERS ----------------- */
 
 // Create uuid unique identifier
 function uuid() {
