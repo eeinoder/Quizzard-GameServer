@@ -14,7 +14,7 @@ import websocket from "websocket";
 const websocketServer = websocket.server;
 const httpServer = http.createServer();
 //const PORT = process.env.PORT || 8080;
-httpServer.listen(8080, () => console.log("Listening... on 9090"));
+httpServer.listen(80, () => console.log("Listening... on 80"));
 
 
 //hashmap clients
@@ -199,7 +199,6 @@ function connectClientResponse(connection) {
   //send back the client connect
   connection.send(JSON.stringify(payLoad))
 
-  // FIX: above doesn't look right. makes a client guid on EVERY request??
   // Testing
   var size = Object.keys(clients).length;
   console.log("Clients size: ", size);
