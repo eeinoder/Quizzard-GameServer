@@ -13,8 +13,7 @@ import websocket from "websocket";
 
 const websocketServer = websocket.server;
 const httpServer = http.createServer();
-// TODO: below is commented out for remote server (?)
-//httpServer.listen(9090, () => console.log("Listening... on 9090"));
+httpServer.listen(9090, () => console.log("Listening... on 9090"));
 
 
 //hashmap clients
