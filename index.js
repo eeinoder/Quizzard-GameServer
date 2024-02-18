@@ -14,7 +14,7 @@ import websocket from "websocket";
 const websocketServer = websocket.server;
 const httpServer = http.createServer();
 //const PORT = process.env.PORT || 8080;
-httpServer.listen(80, () => console.log("Listening... on 80"));
+httpServer.listen(8080, () => console.log("Listening... on 8080"));
 
 
 //hashmap clients
