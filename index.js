@@ -2,8 +2,9 @@
 
 import { requestNewTriviaGame } from "./triviaAPI.js";
 import http from "http";
-import fs from "fs";
 import websocket from "websocket";
+//import fs from "fs";
+//import { WebSocketServer } from 'ws';
 
 // TODO: create https server -> secure websockets
 /*const options = {
@@ -11,10 +12,23 @@ import websocket from "websocket";
   cert: fs.readFileSync('test/fixtures/keys/agent2-cert.pem'),
 };*/
 
+// TODO: testing using 'ws' library
+/*const PORT = process.env.PORT || 9090;
+const wsServer = new WebSocketServer({ port: PORT });
+wsServer.on('connection', ws => {
+  ws.on('message', message => {
+    console.log(`Received message => ${message}`)
+  })
+  ws.send('Hello! Message From Server!!')
+})*/
+
 const websocketServer = websocket.server;
 const httpServer = http.createServer();
-//const PORT = process.env.PORT || 8080;
-httpServer.listen(8080, () => console.log("Listening... on 8080"));
+const PORT = process.env.PORT || 9090;
+httpServer.listen(PORT, () => console.log(`Listening... on ${PORT}`));
+const wsServer = new websocketServer({
+    "httpServer": httpServer
+});
 
 
 //hashmap clients
@@ -25,10 +39,6 @@ const clients = {}; //  Stores client connections (TODO: also, scores, and usern
 // Make objects for client, room, etc.: specify attributes, e.g. username for client
 const maxClients = 12;
 
-const wsServer = new websocketServer({
-    "httpServer": httpServer
-});
-
 // Prompt host for Category, Difficulty, Amount of questions
 //requestTriviaGame("General Knowledge", "something", 50);
 function gameDataHandler(triviaData) {
@@ -36,7 +46,7 @@ function gameDataHandler(triviaData) {
 }
 
 wsServer.on("request", request => {
-  console.log("Requests...")
+  console.log("Taking request...")
     //connect
     const connection = request.accept(null, request.origin);
     connection.on("open", () => console.log("opened!"))
