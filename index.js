@@ -46,7 +46,6 @@ function gameDataHandler(triviaData) {
 }
 
 wsServer.on("request", request => {
-  console.log("Taking request...")
     //connect
     const connection = request.accept(null, request.origin);
     connection.on("open", () => console.log("opened!"))
@@ -78,7 +77,7 @@ wsServer.on("request", request => {
     // TODO: DELETE BELOW, TESTING WITH FORCED DISCONNECT
     /*setTimeout(() => {
       connection.close();
-    }, 2000);*/
+    }, 3000);*/
 })
 
 
@@ -88,6 +87,7 @@ wsServer.on("request", request => {
 // TODO: Add error code if create room fails, sever connection
 function createRoomHandler(result) {
   const hostId = result.clientId;
+  const clientUsername = result.clientUsername;
   const roomCode = uniqueRoomCode();
   console.log(roomCode)
   rooms[roomCode] = {
@@ -95,10 +95,13 @@ function createRoomHandler(result) {
     "hostId": hostId,
     "clients": [hostId]
   }
+  clients[hostId].username = clientUsername;
   // Send back roomCode
+  let usersScores = getUsersScores(roomCode);
   const payLoad = {
     "method": "createRoom",
-    "roomCode": roomCode
+    "roomCode": roomCode,
+    "usersScores": usersScores
   }
   clients[hostId].connection.send(JSON.stringify(payLoad));
 }
@@ -111,24 +114,27 @@ function joinRoomHandler(result) {
   if (roomCode in rooms) {
     clients[clientId].username = clientUsername;
     rooms[roomCode].clients.push(clientId);
+    let usersScores = getUsersScores(roomCode);
     const payLoad = {
       "method": "joinRoom",
       "joinedClientId": clientId,
       "joinedClientUsername": clientUsername,
-      "joinedUsernamesList": [],
+      "usersScores": usersScores,
       "errMsg": ""
     }
     // TODO: SEND LIST OF ALL USERNAMES ON ANY CLIENT JOIN, AND ON RECONNECTS
     rooms[roomCode].clients.forEach(clientId => {
       clients[clientId].connection.send(JSON.stringify(payLoad));
     })
+    // TODO: REMOVE -- TESTING
+    console.log("Room size: ", rooms[roomCode].clients.length)
   }
   else {
     const payLoad = {
       "method": "joinRoom",
       "joinedClientId": "",
       "joinedClientUsername": "",
-      "joinedUsernamesList": [],
+      "usersScores": {},
       "errMsg": "Room Not Found"
     }
     clients[clientId].connection.send(JSON.stringify(payLoad));
@@ -141,20 +147,24 @@ function joinRoomHandler(result) {
 // but client data in clients{} and client reference in room{} persists ...
 // Set clients[clientId (original)] = clients[tempId]
 // delete clients[tempId]
-// TODO/FIX: BUG ON RECONNECT WHERE
 function reconnectHandler(result) {
   const originalClientId = result.originalClientId;
   const tempClientId = result.tempClientId;
+  const clientUsername = result.clientUsername;
   const roomCode = result.roomCode;
+  // TODO: REMOVE BELOW -- TESTING
+  //console.log(`Client ${clientUsername} w/ ID: ${originalClientId} reconnecting w/ tempID: ${tempClientId}`)
   // Verify clientId<->room mapping exists, i.e. prev. client trying to reconnect
   let recipientClientId = tempClientId;
   // Send back response
-  // TODO: SEND BACK OTHER CLIENT DATA TO RELOAD STATS ??
   const payLoad = {
     "method": "reconnect",
     "recipientClientId": recipientClientId,
+    "usersScores": {},
     "errMsg": "Failed to reconnect"
   }
+  // TODO/FIX: RECONNECT BUG HAPPENS HERE, WHEN CLIENTID IS IN SESSION STORAGE
+  // FROM PREVIOUS ROOM SO ROOMCODE IS FOUND BUT OLD CLIENTID IS NOT LINKED
   if (!(roomCode in rooms)) {
     payLoad.errMsg = "Invalid roomcode."
   }
@@ -165,14 +175,19 @@ function reconnectHandler(result) {
     // Re-map new client connection to original clientId
     // rooms map has persistent data associated with original id. Leave as-is.
     payLoad.errMsg = "";
-    clients[originalClientId] = clients[tempClientId];
+    clients[originalClientId].connection = clients[tempClientId].connection;
     delete clients[tempClientId];
     recipientClientId = originalClientId;
     payLoad.recipientClientId = recipientClientId;
+    let usersScores = getUsersScores(roomCode);
+    payLoad.usersScores = usersScores;
+    // TODO: REMOVE -- TESTING
+    console.log("Room size: ", rooms[roomCode].clients.length)
   }
   clients[recipientClientId].connection.send(JSON.stringify(payLoad));
 }
 
+// TODO: NEED TO SERVER CURRENT GAME STATE IF CURRENTLY IN GAME
 // TODO: VERIFY USER IS IN THIS ROOM?
 function chatHandler(result) {
   const roomCode = result.roomCode;
@@ -180,6 +195,7 @@ function chatHandler(result) {
   const msgSenderName = result.clientDisplayName; // how name should be displayed
   const chatMsg = result.chatMsg;
   const type = result.type;
+  // TODO: REMOVE SCORES STUFF -- TESTING
   const payLoad = {
     "method": "chat",
     //"senderId": msgSenderId,
@@ -211,8 +227,26 @@ function connectClientResponse(connection) {
   connection.send(JSON.stringify(payLoad))
 
   // Testing
+  // NOTE/TODO: ON CONNECTION CLOSE, REF. TO CONNECTION STILL SAVED. LIMIT TO NUMBER OF CONNECTIONS?
   var size = Object.keys(clients).length;
   console.log("Clients size: ", size);
+}
+
+
+
+/* ------------------------- GET CLIENT INFORMATION -------------------------  */
+
+// Get map of client username to current score.
+// Send after every new room join and game round to all clients, and after rejoin
+// to reconnecting client.
+function getUsersScores(roomCode) {
+  let scoresMap = {};
+  rooms[roomCode].clients.forEach(clientId => {
+    let username = clients[clientId].username;
+    let score = clients[clientId].gameScore;
+    scoresMap[username] = score;
+  })
+  return scoresMap;
 }
 
 
