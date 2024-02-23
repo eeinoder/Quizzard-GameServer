@@ -17,7 +17,7 @@ let token = ""; // set on first request
 const categories = {"General Knowledge":"9", "Film":"11", "Music":"12", "TV":"14",
 "Art":"25", "Video Games":"15", "Science":"17", "Mythology":"20", "Sports":"21",
 "Geography":"22", "History":"23", "Celebrities":"26"};
-const difficulties = ["easy", "medium", "hard", "something"];
+const difficulties = ["easy", "medium", "hard", ""];
 // Set default request parameters
 const numQuestions = "50";
 const typeQuestions = "multiple";
@@ -26,8 +26,19 @@ const typeQuestions = "multiple";
 // TODO: USE SESSION TOKEN
 
 // Call OpenTDB API
-async function requestNewTriviaGame(category, difficulty, amount=numQuestions, type=typeQuestions) {
-  let url = `${triviaBaseURL}/api.php?amount=${numQuestions}&category=${categories[category]}&difficulty=${difficulty}&type=${type}`
+async function requestNewTriviaGame(gameParams, roomCode) {
+  // Define defaults
+  //let amount = numQuestions;
+  let type = typeQuestions;
+  // Parse specified parameters
+  let [category, amount, difficulty, gameColor] = gameParams;
+  difficulty = difficulty.toLowerCase();
+  if (difficulty === "any") {
+    difficulty = "";
+  }
+  let categoryCode = categories[category];
+  // Build request url
+  let url = `${triviaBaseURL}/api.php?amount=${amount}&category=${categoryCode}&difficulty=${difficulty}&type=${type}`
   if (!(category in categories) || !(difficulties.includes(difficulty))) {
     alert("Invalid category and/or difficulty parameters given.");
   }
@@ -36,8 +47,8 @@ async function requestNewTriviaGame(category, difficulty, amount=numQuestions, t
         .then(resp => resp.json())
         .then(json => gameDataHandler(json));*/
     const response = await fetch(url);
-    const json = await response.json();
-    gameDataHandler(json); // TODO: handle OpenTDB error reponse codes (0-6, listed below)
+    const rawGameDataJSON = await response.json();
+    gameDataHandler(rawGameDataJSON, gameParams, roomCode); // TODO: handle OpenTDB error reponse codes (0-6, listed below)
   } catch (error) {
     console.log(error); // TODO: handle HTTP error response codes (4XX client error, 5XX server error)
   }

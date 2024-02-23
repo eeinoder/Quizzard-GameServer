@@ -30,20 +30,29 @@ const wsServer = new websocketServer({
     "httpServer": httpServer
 });
 
-
-//hashmap clients
 const rooms = {}; // NOTE: 'rooms' previously 'games'
+// e.g. room[roomCode] = {
+//  "roomCode": roomCode,
+//  "hostId": hostId,
+//  "clients": [hostId],
+//  "gameState": "setup"
+//}
+const games = {}; // Game Data: title, questions/answers, current questions
+// e.g. games[gameCode] = {     // NOTE: one game per room at a time, so just make gameCode = roomCode
+//  "gameCode": gameCode,
+//  "gameParams": [gameTitle, gameQuestionNum, gameDifficulty, gameColor],
+//  "gameData": []
+//}
 const clients = {}; //  Stores client connections (TODO: also, scores, and username(?))
-// TODO: have to think about this carefully, how to manage multiple
-// rooms.
-// Make objects for client, room, etc.: specify attributes, e.g. username for client
+// e.g. clients[clientId] = {
+//    "connection":  connection,
+//    "username": "",
+//    "isInGame": false,
+//    "gameScore": 0
+//}
+
 const maxClients = 12;
 
-// Prompt host for Category, Difficulty, Amount of questions
-//requestTriviaGame("General Knowledge", "something", 50);
-function gameDataHandler(triviaData) {
-  console.log(triviaData);
-}
 
 wsServer.on("request", request => {
     //connect
@@ -63,6 +72,18 @@ wsServer.on("request", request => {
         // RECONNECT TO ROOM
         if (result.method === "reconnect") {
           reconnectHandler(result);
+        }
+        // CREATE GAME METHOD
+        if (result.method === "createGame") {
+          createGameHandler(result)
+        }
+        // QUIT GAME HANDLER
+        if (result.method === "quitGame") {
+          quitGameHandler(result);
+        }
+        // JOIN GAME METHOD
+        if (result.method === "joinGame") {
+          joinGameHandler(result);
         }
         // SEND ANSWER METHOD
         if (result.method === "play") {
@@ -93,9 +114,11 @@ function createRoomHandler(result) {
   rooms[roomCode] = {
     "roomCode": roomCode,
     "hostId": hostId,
-    "clients": [hostId]
+    "clients": [hostId],
+    "gameState": "setup"
   }
   clients[hostId].username = clientUsername;
+  clients[hostId].isInGame = true;
   // Send back roomCode
   let usersScores = getUsersScores(roomCode);
   const payLoad = {
@@ -115,11 +138,20 @@ function joinRoomHandler(result) {
     clients[clientId].username = clientUsername;
     rooms[roomCode].clients.push(clientId);
     let usersScores = getUsersScores(roomCode);
+    let usersInGame = getUsersInGame(roomCode);
+    let gameState = rooms[roomCode].gameState;
+    let gameParams = [];
+    if (roomCode in games) {
+      gameParams = games[roomCode].gameParams;
+    }
     const payLoad = {
       "method": "joinRoom",
       "joinedClientId": clientId,
       "joinedClientUsername": clientUsername,
       "usersScores": usersScores,
+      "usersInGame": usersInGame,
+      "gameState": gameState,
+      "gameParams": gameParams,
       "errMsg": ""
     }
     // TODO: SEND LIST OF ALL USERNAMES ON ANY CLIENT JOIN, AND ON RECONNECTS
@@ -135,6 +167,9 @@ function joinRoomHandler(result) {
       "joinedClientId": "",
       "joinedClientUsername": "",
       "usersScores": {},
+      "usersInGame": {},
+      "gameState": "",
+      "gameParams": [],
       "errMsg": "Room Not Found"
     }
     clients[clientId].connection.send(JSON.stringify(payLoad));
@@ -161,7 +196,10 @@ function reconnectHandler(result) {
     "method": "reconnect",
     "recipientClientId": recipientClientId,
     "usersScores": {},
-    "errMsg": "Failed to reconnect"
+    "usersInGame": {},
+    "gameState": "",
+    "gameParams": [],
+    "errMsg": "Failed to reconnect."
   }
   // TODO/FIX: RECONNECT BUG HAPPENS HERE, WHEN CLIENTID IS IN SESSION STORAGE
   // FROM PREVIOUS ROOM SO ROOMCODE IS FOUND BUT OLD CLIENTID IS NOT LINKED
@@ -179,12 +217,140 @@ function reconnectHandler(result) {
     delete clients[tempClientId];
     recipientClientId = originalClientId;
     payLoad.recipientClientId = recipientClientId;
-    let usersScores = getUsersScores(roomCode);
-    payLoad.usersScores = usersScores;
+    // (Re)send other join-status users' data, game state data
+    payLoad.usersScores = getUsersScores(roomCode);
+    payLoad.usersInGame = getUsersInGame(roomCode);
+    payLoad.gameState = rooms[roomCode].gameState;
+    if (roomCode in games) {
+      payLoad.gameParams = games[roomCode].gameParams;
+    }
     // TODO: REMOVE -- TESTING
     console.log("Room size: ", rooms[roomCode].clients.length)
   }
   clients[recipientClientId].connection.send(JSON.stringify(payLoad));
+}
+
+// Create new game
+function createGameHandler(result) {
+  const clientId = result.clientId;
+  const roomCode = result.roomCode;
+  const gameParams = result.gameParams;
+  //let [gameTitle, gameQuestionNum, gameDifficulty, gameColor] = gameParams;
+  const payLoad = {
+    "method": "createGame",
+    "gameParams": gameParams,
+    "gameState": "setup",             // NOTE: default state, change to "join"
+    "joinedUsers": {},
+    "errMsg": "Failed to create game." // NOTE: default err message
+  }
+  // Verify requesting client is room host
+  if (clientId !== rooms[roomCode].hostId) {
+    payLoad.errMsg = "Only host can create game."
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+  }
+  else {
+    // Request for trivia game data. Response handled in gameDataHandler.
+    requestNewTriviaGame(gameParams, roomCode);
+  }
+}
+// OpenTDB Trivia Data Response handler
+function gameDataHandler(triviaData, gameParams, roomCode) {
+  // Create payLoad
+  const payLoad = {
+    "method": "createGame",
+    "gameParams": gameParams,
+    "gameState": "setup",             // NOTE: default state, change to "join"
+    "joinedUsers": {},
+    "errMsg": "Failed to get trivia data." // NOTE: default err message
+  }
+  // Successfully got trivia data
+  if (triviaData.response_code === 0) {
+    createNewGame(triviaData.results, gameParams, roomCode);
+    payLoad.gameState = rooms[roomCode].gameState;
+    payLoad.joinedUsers = getUsersInGame(roomCode);
+    payLoad.errMsg = "";
+  }
+  // Send to all clients
+  rooms[roomCode].clients.forEach(clientId => {
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+  })
+}
+
+// Quit Game Handler
+function quitGameHandler(result) {
+  const clientId = result.clientId;
+  const roomCode = result.roomCode;
+  const payLoad = {
+    "method": "quitGame",
+    "gameState": "join",    // Default state if quit game fails
+    "errMsg": ""
+  }
+  // Verify room exists
+  if (!(roomCode in rooms)) {
+    payLoad.errMsg = "Invalid roomcode."
+  }
+  // Verify requesting client is room host
+  else if (clientId !== rooms[roomCode].hostId) {
+    payLoad.errMsg = "Only host can quit game."
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+  }
+  // Verify game exists
+  else if (!(roomCode in games)) {
+    payLoad.errMsg = "Game does not exist."
+  }
+  // Quit game -- Reset users inGame flag, set game state, delete game object
+  else {
+    quitGame(roomCode);
+    payLoad.gameState = rooms[roomCode].gameState;
+  }
+  // Send to all clients
+  rooms[roomCode].clients.forEach(clientId => {
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+  })
+}
+
+// Join Game Handler
+function joinGameHandler(result) {
+  const clientId = result.clientId;
+  const clientUsername = result.clientUsername;
+  const roomCode = result.roomCode;
+  const payLoad = {
+    "method": "joinGame",
+    "joinedGameList": {},
+    "joinedGameClientId": "",
+    "joinedGameUser": "",
+    "gameParams": [],
+    "errMsg": ""
+  }
+  // Verify room exists
+  if (!(roomCode in rooms)) {
+    payLoad.errMsg = "Invalid roomcode."
+  }
+  // Verify client in this room
+  else if (!(rooms[roomCode].clients.includes(clientId))) {
+    payLoad.errMsg = "Client Id not found."
+  }
+  // Verify game exists
+  else if (!(roomCode in games)) {
+    payLoad.errMsg = "Game does not exist."
+  }
+  // Add user to game joined list
+  else {
+    clients[clientId].isInGame = true;
+    payLoad.joinedGameClientId = clientId;
+    payLoad.joinedGameUser = clientUsername;
+    payLoad.joinedGameList = getUsersInGame(roomCode);
+    payLoad.gameParams = games[roomCode].gameParams;
+  }
+  // Send payload to every user if successful, or just requesting client if not
+  if (payLoad.errMsg === "") {
+    rooms[roomCode].clients.forEach(clientId => {
+      clients[clientId].connection.send(JSON.stringify(payLoad));
+    })
+  }
+  else {
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+  }
 }
 
 // TODO: NEED TO SERVER CURRENT GAME STATE IF CURRENTLY IN GAME
@@ -217,6 +383,7 @@ function connectClientResponse(connection) {
   clients[clientId] = {
       "connection":  connection,
       "username": "",
+      "isInGame": false,
       "gameScore": 0
   }
   const payLoad = {
@@ -234,7 +401,34 @@ function connectClientResponse(connection) {
 
 
 
-/* ------------------------- GET CLIENT INFORMATION -------------------------  */
+/* ------------------------- GET/SET GAME INFORMATION -------------------------  */
+
+function createNewGame(triviaDataList, gameParams, roomCode) {
+  // Reset user isInGame state
+  resetUsersInGame(roomCode);
+  // Add host to joined users by default
+  let hostId = rooms[roomCode].hostId;
+  clients[hostId].isInGame = true;
+  // Create new game object in games
+  games[roomCode] = {
+    "gameCode": roomCode,
+    "gameParams": gameParams,
+    "gameData": triviaDataList
+  }
+  // Update room game state on successful create game
+  rooms[roomCode].gameState = "join";
+}
+
+function quitGame(roomCode) {
+  // Reset user isInGame state
+  resetUsersInGame(roomCode);
+  // Delete game object
+  delete games[roomCode];
+  // Update room game state on successful quit game
+  rooms[roomCode].gameState = "setup";
+}
+
+/* ------------------------- GET/SET CLIENT INFORMATION -------------------------  */
 
 // Get map of client username to current score.
 // Send after every new room join and game round to all clients, and after rejoin
@@ -247,6 +441,22 @@ function getUsersScores(roomCode) {
     scoresMap[username] = score;
   })
   return scoresMap;
+}
+
+function getUsersInGame(roomCode) {
+  let usersInGame = {};
+  rooms[roomCode].clients.forEach(clientId => {
+    let username = clients[clientId].username;
+    let isInGame = clients[clientId].isInGame;
+    usersInGame[username] = isInGame;
+  })
+  return usersInGame;
+}
+
+function resetUsersInGame(roomCode) {
+  rooms[roomCode].clients.forEach(clientId => {
+    clients[clientId].isInGame = false;
+  })
 }
 
 
