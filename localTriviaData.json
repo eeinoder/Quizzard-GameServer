@@ -1,7 +1,3 @@
-// example opentdb trivia JSON response
-
-// https://opentdb.com/api.php?amount=50&category=9&difficulty=medium
-
 {
   "response_code":0,
   "results":[

@@ -6,7 +6,7 @@
 // Host then has choice of CATEGORY and DIFFICULTY.
 
 import fetch from "node-fetch";
-import { gameDataHandler } from "./index.js"
+import { gameQADataHandler } from "./index.js"
 
 
 // Base fetch url
@@ -45,11 +45,13 @@ async function requestNewTriviaGame(gameParams, roomCode) {
   try {
     /*await fetch(url)
         .then(resp => resp.json())
-        .then(json => gameDataHandler(json));*/
+        .then(json => gameQADataHandler(json));*/
     const response = await fetch(url);
     const rawGameDataJSON = await response.json();
-    gameDataHandler(rawGameDataJSON, gameParams, roomCode); // TODO: handle OpenTDB error reponse codes (0-6, listed below)
+    gameQADataHandler(rawGameDataJSON, gameParams, roomCode); // TODO: handle OpenTDB error reponse codes (0-6, listed below)
   } catch (error) {
+    let emptyJSON = {};
+    gameQADataHandler(emptyJSON, gameParams, roomCode, error);
     console.log(error); // TODO: handle HTTP error response codes (4XX client error, 5XX server error)
   }
 }

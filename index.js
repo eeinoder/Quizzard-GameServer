@@ -3,6 +3,7 @@
 import { requestNewTriviaGame } from "./triviaAPI.js";
 import http from "http";
 import websocket from "websocket";
+import { readFile } from "fs/promises";
 //import fs from "fs";
 //import { WebSocketServer } from 'ws';
 
@@ -30,7 +31,7 @@ const wsServer = new websocketServer({
     "httpServer": httpServer
 });
 
-const rooms = {}; // NOTE: 'rooms' previously 'games'
+const rooms = {};
 // e.g. room[roomCode] = {
 //  "roomCode": roomCode,
 //  "hostId": hostId,
@@ -41,7 +42,14 @@ const games = {}; // Game Data: title, questions/answers, current questions
 // e.g. games[gameCode] = {     // NOTE: one game per room at a time, so just make gameCode = roomCode
 //  "gameCode": gameCode,
 //  "gameParams": [gameTitle, gameQuestionNum, gameDifficulty, gameColor],
-//  "gameData": []
+//  "gameQAData": [],           // Results array from OpenTDB response with question data objects
+//  "timerTime": 10000,         // Time to answer question in ms, default 10s
+//  "currQuestionNum": 0,
+//  "currTimerEnd": 0,          // When current question timer will elapse in ms, = Date.now() + T, T=10s by default
+//  "currQuestion": "...",      // String of currrent question
+//  "currAnswerOptions": [...], // Array with answer options
+//  "clientAnswers": {...},     // Map (object) of clientIds to answer string given for current question
+//  "clientResults": {...}      // Map (object) of clientIds to result, "true"/"false", right or wrong
 //}
 const clients = {}; //  Stores client connections (TODO: also, scores, and username(?))
 // e.g. clients[clientId] = {
@@ -81,18 +89,41 @@ wsServer.on("request", request => {
         if (result.method === "quitGame") {
           quitGameHandler(result);
         }
+        // START GAME ROUND HANDLER
+        if (result.method === "startGameRound") {
+          startGameRoundHandler(result);
+        }
         // JOIN GAME METHOD
         if (result.method === "joinGame") {
           joinGameHandler(result);
         }
         // SEND ANSWER METHOD
         if (result.method === "play") {
-
+          playHandler(result);
         }
         // SEND CHAT MESSAGE METHOD
         if (result.method === "chat") {
           chatHandler(result);
         }
+
+        // TODO: (on FE too)
+
+        // Reduce redundant handlers -> all that return game view to load into FE
+
+        // -> getGameView (?)
+
+        // TODO: GAME LOOP EVENTS
+
+        // startGameRoundHandler ...
+
+        // getTimer -> at round start, calculate Date.Now + T + 1 (eg 10s)
+        //      Nn reconnect, return this end time, remaining time calculated
+        //      on client side.
+
+        // getGameResults
+        //       get current and cumulative results
+        //      add "END GAME" header in FE after last question (?)
+
     })
     connectClientResponse(connection);
     // TODO: DELETE BELOW, TESTING WITH FORCED DISCONNECT
@@ -140,9 +171,9 @@ function joinRoomHandler(result) {
     let usersScores = getUsersScores(roomCode);
     let usersInGame = getUsersInGame(roomCode);
     let gameState = rooms[roomCode].gameState;
-    let gameParams = [];
+    let gameData = [];
     if (roomCode in games) {
-      gameParams = games[roomCode].gameParams;
+      gameData = getCurrentGameData(roomCode);
     }
     const payLoad = {
       "method": "joinRoom",
@@ -151,7 +182,7 @@ function joinRoomHandler(result) {
       "usersScores": usersScores,
       "usersInGame": usersInGame,
       "gameState": gameState,
-      "gameParams": gameParams,
+      "gameData": gameData,
       "errMsg": ""
     }
     // TODO: SEND LIST OF ALL USERNAMES ON ANY CLIENT JOIN, AND ON RECONNECTS
@@ -169,7 +200,7 @@ function joinRoomHandler(result) {
       "usersScores": {},
       "usersInGame": {},
       "gameState": "",
-      "gameParams": [],
+      "gameData": {},
       "errMsg": "Room Not Found"
     }
     clients[clientId].connection.send(JSON.stringify(payLoad));
@@ -198,7 +229,7 @@ function reconnectHandler(result) {
     "usersScores": {},
     "usersInGame": {},
     "gameState": "",
-    "gameParams": [],
+    "gameData": {},
     "errMsg": "Failed to reconnect."
   }
   // TODO/FIX: RECONNECT BUG HAPPENS HERE, WHEN CLIENTID IS IN SESSION STORAGE
@@ -221,9 +252,11 @@ function reconnectHandler(result) {
     payLoad.usersScores = getUsersScores(roomCode);
     payLoad.usersInGame = getUsersInGame(roomCode);
     payLoad.gameState = rooms[roomCode].gameState;
+    // Send game data
     if (roomCode in games) {
-      payLoad.gameParams = games[roomCode].gameParams;
+      payLoad.gameData = getCurrentGameData(roomCode);
     }
+
     // TODO: REMOVE -- TESTING
     console.log("Room size: ", rooms[roomCode].clients.length)
   }
@@ -236,11 +269,13 @@ function createGameHandler(result) {
   const roomCode = result.roomCode;
   const gameParams = result.gameParams;
   //let [gameTitle, gameQuestionNum, gameDifficulty, gameColor] = gameParams;
+  let [gameTitle, ...restParams] = gameParams;
   const payLoad = {
     "method": "createGame",
-    "gameParams": gameParams,
     "gameState": "setup",             // NOTE: default state, change to "join"
     "joinedUsers": {},
+    "usersScores": {},
+    "gameData": {},
     "errMsg": "Failed to create game." // NOTE: default err message
   }
   // Verify requesting client is room host
@@ -249,25 +284,48 @@ function createGameHandler(result) {
     clients[clientId].connection.send(JSON.stringify(payLoad));
   }
   else {
-    // Request for trivia game data. Response handled in gameDataHandler.
-    requestNewTriviaGame(gameParams, roomCode);
+    // TODO: FIX/REMOVE -- TEMPORARY MEASURE TO ALLOW FOR TESTING WHEN OpenTDB IS DOWN
+    // MAYBE HAVE BETTER "OFFLINE" AS FULL FEATURE IN FUTURE
+    if (gameTitle === "GK Offline") {
+      console.log("Retreiving local trivia data")
+      readLocalTriviaData(gameParams, roomCode);
+    }
+    else {
+      console.log("Fetching OpenTDB trivia data")
+      // Request for trivia game data. Response handled in gameQADataHandler.
+      requestNewTriviaGame(gameParams, roomCode);
+    }
   }
 }
+// Read JSON file with example of opentdb trivia JSON response
+async function readLocalTriviaData(gameParams, roomCode) {
+  // Original request url: https://opentdb.com/api.php?amount=50&category=9&difficulty=medium
+  await readFile(new URL("./localTriviaData.json", import.meta.url))
+    .then(textData => gameQADataHandler(JSON.parse(textData), gameParams, roomCode));
+}
 // OpenTDB Trivia Data Response handler
-function gameDataHandler(triviaData, gameParams, roomCode) {
+function gameQADataHandler(triviaData, gameParams, roomCode, errMsg="") {
   // Create payLoad
   const payLoad = {
     "method": "createGame",
-    "gameParams": gameParams,
     "gameState": "setup",             // NOTE: default state, change to "join"
     "joinedUsers": {},
+    "usersScores": {},
+    "gameData": {},
     "errMsg": "Failed to get trivia data." // NOTE: default err message
   }
+  // Fetch request failed, likely a server issue
+  if (errMsg !== "") {
+    payLoad.errMsg = errMsg;
+  }
   // Successfully got trivia data
-  if (triviaData.response_code === 0) {
+  else if (triviaData.response_code === 0) {
+    console.log("Server received trivia data")
     createNewGame(triviaData.results, gameParams, roomCode);
     payLoad.gameState = rooms[roomCode].gameState;
     payLoad.joinedUsers = getUsersInGame(roomCode);
+    payLoad.usersScores = getUsersScores(roomCode);
+    payLoad.gameData = getCurrentGameData(roomCode);
     payLoad.errMsg = "";
   }
   // Send to all clients
@@ -309,6 +367,52 @@ function quitGameHandler(result) {
   })
 }
 
+// Start next game round
+function startGameRoundHandler(result) {
+  const clientId = result.clientId;
+  const roomCode = result.roomCode;
+  const payLoad = {
+    "method": "startGameRound",
+    "gameState": "join",          // If get next round fails, go to game join (?)
+    "gameData": {},
+    "errMsg": ""
+  }
+  // Verify room exists
+  if (!(roomCode in rooms)) {
+    payLoad.errMsg = "Invalid roomcode."
+  }
+  // Verify requesting client is room host
+  else if (clientId !== rooms[roomCode].hostId) {
+    payLoad.errMsg = "Only host can start game round."
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+  }
+  // Verify game exists
+  else if (!(roomCode in games)) {
+    payLoad.errMsg = "Game does not exist."
+  }
+  else {
+    startGameRound(roomCode); // -> set to "play" state, increment game round
+    payLoad.gameState = rooms[roomCode].gameState;
+    payLoad.gameData = getCurrentGameData(roomCode);
+  }
+  // Send to all clients
+  rooms[roomCode].clients.forEach(clientId => {
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+  })
+}
+
+// TODO: FINISH -- Get round results
+function gameResultsHandler(roomCode) {
+  // TODO: if curr is last question -> handle
+  const payLoad = {
+    "method": "getResults"
+  }
+  // Send to all clients
+  rooms[roomCode].clients.forEach(clientId => {
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+  })
+}
+
 // Join Game Handler
 function joinGameHandler(result) {
   const clientId = result.clientId;
@@ -319,7 +423,6 @@ function joinGameHandler(result) {
     "joinedGameList": {},
     "joinedGameClientId": "",
     "joinedGameUser": "",
-    "gameParams": [],
     "errMsg": ""
   }
   // Verify room exists
@@ -340,7 +443,6 @@ function joinGameHandler(result) {
     payLoad.joinedGameClientId = clientId;
     payLoad.joinedGameUser = clientUsername;
     payLoad.joinedGameList = getUsersInGame(roomCode);
-    payLoad.gameParams = games[roomCode].gameParams;
   }
   // Send payload to every user if successful, or just requesting client if not
   if (payLoad.errMsg === "") {
@@ -351,6 +453,11 @@ function joinGameHandler(result) {
   else {
     clients[clientId].connection.send(JSON.stringify(payLoad));
   }
+}
+
+// Play Game (answer questions, etc.)
+function playHandler(result) {
+  // TODO: send back "received" message, display in play view
 }
 
 // TODO: NEED TO SERVER CURRENT GAME STATE IF CURRENTLY IN GAME
@@ -401,11 +508,13 @@ function connectClientResponse(connection) {
 
 
 
-/* ------------------------- GET/SET GAME INFORMATION -------------------------  */
+/* ------------------------- GAME ACTION HANDLERS -------------------------  */
 
 function createNewGame(triviaDataList, gameParams, roomCode) {
   // Reset user isInGame state
   resetUsersInGame(roomCode);
+  // Reset user scores
+  resetUsersScores(roomCode);
   // Add host to joined users by default
   let hostId = rooms[roomCode].hostId;
   clients[hostId].isInGame = true;
@@ -413,7 +522,14 @@ function createNewGame(triviaDataList, gameParams, roomCode) {
   games[roomCode] = {
     "gameCode": roomCode,
     "gameParams": gameParams,
-    "gameData": triviaDataList
+    "gameQAData": triviaDataList,
+    "timerTime": 10000,
+    "currQuestionNum": -1,
+    "currTimerEnd": 0,
+    "currQuestion": "",
+    "currAnswerOptions": [],
+    "clientAnswers": {},
+    "clientResults": {}
   }
   // Update room game state on successful create game
   rooms[roomCode].gameState = "join";
@@ -426,6 +542,100 @@ function quitGame(roomCode) {
   delete games[roomCode];
   // Update room game state on successful quit game
   rooms[roomCode].gameState = "setup";
+}
+
+function startGameRound(roomCode) {
+  // Update room state
+  rooms[roomCode].gameState = "play";
+  // Increment current question, reset client answers and results, reset timer
+  incrementCurrQuestion(roomCode);
+  // Start round timer
+  startRoundTimer(roomCode);
+}
+
+// NOTE: clients should only be able to answer each question once
+function play() {
+  // Save client response
+  // Grade, store result
+  // TODO: if last person answers, go to results ??
+  // TODO: timer ??
+}
+
+/* ------------------------- GAME ACTION HELPERS ------------------------- */
+// NOTE: Make sure to call this only once per round, ONLY by Host
+function incrementCurrQuestion(roomCode) {
+  // TODO: CHANGE GAME PARAMS ARRAY TO OBJECT,
+  // gameParams = {"gameTitle": ..., "questionAmount": ..., "difficulty": ..., "color": ...}
+  let questionAmount = parseInt(games[roomCode].gameParams[1]);
+  // Verify there is a next question
+  if (games[roomCode].currQuestionNum < questionAmount-1) {
+    // Increment question data
+    games[roomCode].currQuestionNum = games[roomCode].currQuestionNum + 1;
+    console.log("Incr'd question num: ", games[roomCode].currQuestionNum)
+    games[roomCode].currQuestion = getCurrentQuestion(roomCode);
+    games[roomCode].currAnswerOptions = getCurrentAnswerOptionsRandomized(roomCode);
+    // Reset client answer/result info
+    games[roomCode].clientAnswers = {};
+    games[roomCode].clientResults = {};
+    // Reset timer end time
+    games[roomCode].currTimerEnd = Date.now() + games[roomCode].timerTime + 1000;
+  }
+}
+
+function getCurrentGameData(roomCode) {
+  // TODO: CAN BE SMARTER ABOUT. BE MORE EFFICIENT. ONLY RETURN WHAT IS NEEDED
+  // DEPENDING ON CURR GAME STATE.
+  // MAY WANT TO HAVE clientId PARAMETER AS WELL FOR ANSWER, RESULT ON RECONNECT IE BEFORE ROUND END.
+  let gameData = {
+    "currQuestionNum": games[roomCode].currQuestionNum,
+    "currTimerEnd": games[roomCode].currTimerEnd,
+    "currQuestion": games[roomCode].currQuestion,
+    "currAnswerOptions": games[roomCode].currAnswerOptions,
+    "gameParams": games[roomCode].gameParams,
+    "clientAnswers": games[roomCode].clientAnswers,
+    "clientResults": games[roomCode].clientResults
+  }
+  return gameData;
+}
+
+function getCurrentQuestion(roomCode) {
+  let currQuestionNum = games[roomCode].currQuestionNum;
+  return games[roomCode].gameQAData[currQuestionNum].question;
+}
+
+function getCurrentAnswerOptionsRandomized(roomCode) {
+  let currQuestionNum = games[roomCode].currQuestionNum;
+  let answerOptions = games[roomCode].gameQAData[currQuestionNum].incorrect_answers;
+  answerOptions.push(games[roomCode].gameQAData[currQuestionNum].correct_answer);
+  // Shuffle array (Fisher-Yates shuffle)
+  let currIndex = answerOptions.length;
+  let randIndex;
+  while (currIndex > 0) {
+    randIndex = Math.floor(Math.random() * currIndex);
+    currIndex--;
+    [answerOptions[currIndex], answerOptions[randIndex]] = [answerOptions[randIndex], answerOptions[currIndex]];
+  }
+  return answerOptions;
+}
+
+function getAnswerResult(roomCode, clientAnswer) {
+
+}
+
+// Start timer at start of round, keep reference in case of reconnect
+function startRoundTimer(roomCode) {
+  // Keep track of time left to 0.1s
+  let timeLeftMs = games[roomCode].currTimerEnd - Date.now();
+  let timeLeftDs = Math.floor(timeLeftMs/100) / 10;
+  timeLeftDs = Math.max(timeLeftDs, 0);
+  if (timeLeftDs > 0) {
+    setTimeout(() => {
+      startRoundTimer(roomCode);
+    }, 100);
+  }
+  else {
+    gameResultsHandler(roomCode);
+  }
 }
 
 /* ------------------------- GET/SET CLIENT INFORMATION -------------------------  */
@@ -441,6 +651,12 @@ function getUsersScores(roomCode) {
     scoresMap[username] = score;
   })
   return scoresMap;
+}
+
+function resetUsersScores(roomCode) {
+  rooms[roomCode].clients.forEach(clientId => {
+    clients[clientId].gameScore = 0;
+  })
 }
 
 function getUsersInGame(roomCode) {
@@ -492,4 +708,4 @@ function genNewRoomCode() {
 }
 
 
-export { gameDataHandler };
+export { gameQADataHandler };
