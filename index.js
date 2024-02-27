@@ -55,7 +55,7 @@ const clients = {}; //  Stores client connections (TODO: also, scores, and usern
 // e.g. clients[clientId] = {
 //    "connection":  connection,
 //    "username": "",
-//    "isInGame": false,
+//    "isPlaying": false,
 //    "gameScore": 0
 //}
 
@@ -149,7 +149,6 @@ function createRoomHandler(result) {
     "gameState": "setup"
   }
   clients[hostId].username = clientUsername;
-  clients[hostId].isInGame = true;
   // Send back roomCode
   let usersScores = getUsersScores(roomCode);
   const payLoad = {
@@ -427,7 +426,7 @@ function joinGameHandler(result) {
   }
   // Add user to game joined list
   else {
-    clients[clientId].isInGame = true;
+    clients[clientId].isPlaying = true;
     payLoad.joinedGameClientId = clientId;
     payLoad.joinedGameUser = clientUsername;
     payLoad.joinedGameList = getUsersInGame(roomCode);
@@ -461,6 +460,11 @@ function playHandler(result) {
   if (clientId in games[roomCode].clientAnswers) {
     payLoad.errMsg = "Clients can only answer once."
   }
+  // Verify client is playing, not spectating
+  // (This is sanity check. Already verified on FE.)
+  else if (!(clients[clientId].isPlaying)) {
+    payLoad.errMsg = "Client is spectating. Answer not graded or recorded."
+  }
   else {
     play(roomCode, clientId, answer);
     payLoad.gameData = getCurrentGameData(roomCode);
@@ -469,13 +473,23 @@ function playHandler(result) {
   clients[clientId].connection.send(JSON.stringify(payLoad));
 }
 
-// TODO: FINISH -- Get round results
+// Game Results handler (TODO: add host ability to force results page)
 function gameResultsHandler(roomCode) {
+  console.log("Server: Getting results")
   // TODO: if curr is last question -> handle
   // TODO: return usersscores, already updated in playHandler
+  // NOTE: if user fails to answer in time, no entry in clientAnswers or clientResults
+  //  Just handle results stats intuitively
+
+  // Update room state
+  rooms[roomCode].gameState = "results";
   const payLoad = {
-    "method": "getResults"
+    "method": "getResults",
+    "gameState": "results",
+    "gameData": getCurrentGameData(roomCode),
+    "usersScores": getUsersScores(roomCode)
   }
+  console.log("Scores: ", payLoad.usersScores)
   // Send to all clients
   rooms[roomCode].clients.forEach(clientId => {
     clients[clientId].connection.send(JSON.stringify(payLoad));
@@ -511,7 +525,7 @@ function connectClientResponse(connection) {
   clients[clientId] = {
       "connection":  connection,
       "username": "",
-      "isInGame": false,
+      "isPlaying": false,
       "gameScore": 0
   }
   const payLoad = {
@@ -532,13 +546,12 @@ function connectClientResponse(connection) {
 /* ------------------------- GAME ACTION HANDLERS -------------------------  */
 
 function createNewGame(triviaDataList, gameParams, roomCode) {
-  // Reset user isInGame state
+  // Reset user isPlaying state
   resetUsersInGame(roomCode);
   // Reset user scores
   resetUsersScores(roomCode);
   // Add host to joined users by default
   let hostId = rooms[roomCode].hostId;
-  clients[hostId].isInGame = true;
   // Create new game object in games
   games[roomCode] = {
     "gameCode": roomCode,
@@ -559,7 +572,7 @@ function createNewGame(triviaDataList, gameParams, roomCode) {
 }
 
 function quitGame(roomCode) {
-  // Reset user isInGame state
+  // Reset user isPlaying state
   resetUsersInGame(roomCode);
   // Delete game object
   delete games[roomCode];
@@ -586,8 +599,10 @@ function play(roomCode, clientId, answer) {
   if (isCorrect) {
     addToUserScore(roomCode, clientId, games[roomCode].currQuestionValue);
   }
-  // TODO: if last person answers, go to results ??
-  // TODO: make host not playing by default but can join
+  // If last person answers before time expires, go to results (?)
+  if (Object.keys(games[roomCode].clientAnswers).length === getNumberUsersInGame(roomCode)) {
+    gameResultsHandler(roomCode);
+  }
 }
 
 /* ------------------------- GAME ACTION HELPERS ------------------------- */
@@ -659,12 +674,14 @@ function startRoundTimer(roomCode) {
   let timeLeftMs = games[roomCode].currTimerEnd - Date.now();
   let timeLeftDs = Math.floor(timeLeftMs/100) / 10;
   timeLeftDs = Math.max(timeLeftDs, 0);
+  // Update timekeeping every 0.1s (enough accuracy for timer sync)
   if (timeLeftDs > 0) {
     setTimeout(() => {
       startRoundTimer(roomCode);
     }, 100);
   }
-  else {
+  // If timer done AND game is not already in "results" state, show results
+  else if (rooms[roomCode].gameState !== "results") {
     gameResultsHandler(roomCode);
   }
 }
@@ -699,15 +716,25 @@ function getUsersInGame(roomCode) {
   let usersInGame = {};
   rooms[roomCode].clients.forEach(clientId => {
     let username = clients[clientId].username;
-    let isInGame = clients[clientId].isInGame;
-    usersInGame[username] = isInGame;
+    let isPlaying = clients[clientId].isPlaying;
+    usersInGame[username] = isPlaying;
   })
   return usersInGame;
 }
 
+function getNumberUsersInGame(roomCode) {
+  let numUsersInGame = 0;
+  rooms[roomCode].clients.forEach(clientId => {
+    if (clients[clientId].isPlaying) {
+      numUsersInGame++;
+    }
+  })
+  return numUsersInGame;
+}
+
 function resetUsersInGame(roomCode) {
   rooms[roomCode].clients.forEach(clientId => {
-    clients[clientId].isInGame = false;
+    clients[clientId].isPlaying = false;
   })
 }
 
