@@ -401,18 +401,6 @@ function startGameRoundHandler(result) {
   })
 }
 
-// TODO: FINISH -- Get round results
-function gameResultsHandler(roomCode) {
-  // TODO: if curr is last question -> handle
-  const payLoad = {
-    "method": "getResults"
-  }
-  // Send to all clients
-  rooms[roomCode].clients.forEach(clientId => {
-    clients[clientId].connection.send(JSON.stringify(payLoad));
-  })
-}
-
 // Join Game Handler
 function joinGameHandler(result) {
   const clientId = result.clientId;
@@ -458,6 +446,40 @@ function joinGameHandler(result) {
 // Play Game (answer questions, etc.)
 function playHandler(result) {
   // TODO: send back "received" message, display in play view
+  const clientId = result.clientId;
+  const clientUsername = result.clientUsername;
+  const roomCode = result.roomCode;
+  const answer = result.answer;
+  const payLoad = {
+    "method": "play",
+    "clientId": clientId,
+    "gameData": {},
+    "errMsg": ""
+  }
+  // TODO: more robust Err handling
+  // Verify client answer not already recorded
+  if (clientId in games[roomCode].clientAnswers) {
+    payLoad.errMsg = "Clients can only answer once."
+  }
+  else {
+    play(roomCode, clientId, answer);
+    payLoad.gameData = getCurrentGameData(roomCode);
+  }
+  // Send back to sending client
+  clients[clientId].connection.send(JSON.stringify(payLoad));
+}
+
+// TODO: FINISH -- Get round results
+function gameResultsHandler(roomCode) {
+  // TODO: if curr is last question -> handle
+  // TODO: return usersscores, already updated in playHandler
+  const payLoad = {
+    "method": "getResults"
+  }
+  // Send to all clients
+  rooms[roomCode].clients.forEach(clientId => {
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+  })
 }
 
 // TODO: NEED TO SERVER CURRENT GAME STATE IF CURRENTLY IN GAME
@@ -468,7 +490,6 @@ function chatHandler(result) {
   const msgSenderName = result.clientDisplayName; // how name should be displayed
   const chatMsg = result.chatMsg;
   const type = result.type;
-  // TODO: REMOVE SCORES STUFF -- TESTING
   const payLoad = {
     "method": "chat",
     //"senderId": msgSenderId,
@@ -527,6 +548,8 @@ function createNewGame(triviaDataList, gameParams, roomCode) {
     "currQuestionNum": -1,
     "currTimerEnd": 0,
     "currQuestion": "",
+    "currQuestionValue": 10,
+    "currCorrectAnswer": "",
     "currAnswerOptions": [],
     "clientAnswers": {},
     "clientResults": {}
@@ -554,11 +577,17 @@ function startGameRound(roomCode) {
 }
 
 // NOTE: clients should only be able to answer each question once
-function play() {
+function play(roomCode, clientId, answer) {
   // Save client response
+  games[roomCode].clientAnswers[clientId] = answer;
   // Grade, store result
+  let isCorrect = (answer === games[roomCode].currCorrectAnswer);
+  games[roomCode].clientResults[clientId] = isCorrect;
+  if (isCorrect) {
+    addToUserScore(roomCode, clientId, games[roomCode].currQuestionValue);
+  }
   // TODO: if last person answers, go to results ??
-  // TODO: timer ??
+  // TODO: make host not playing by default but can join
 }
 
 /* ------------------------- GAME ACTION HELPERS ------------------------- */
@@ -573,6 +602,7 @@ function incrementCurrQuestion(roomCode) {
     games[roomCode].currQuestionNum = games[roomCode].currQuestionNum + 1;
     console.log("Incr'd question num: ", games[roomCode].currQuestionNum)
     games[roomCode].currQuestion = getCurrentQuestion(roomCode);
+    games[roomCode].currCorrectAnswer = getCurrentCorrectAnswer(roomCode);
     games[roomCode].currAnswerOptions = getCurrentAnswerOptionsRandomized(roomCode);
     // Reset client answer/result info
     games[roomCode].clientAnswers = {};
@@ -603,6 +633,11 @@ function getCurrentQuestion(roomCode) {
   return games[roomCode].gameQAData[currQuestionNum].question;
 }
 
+function getCurrentCorrectAnswer(roomCode) {
+  let currQuestionNum = games[roomCode].currQuestionNum;
+  return games[roomCode].gameQAData[currQuestionNum].correct_answer;
+}
+
 function getCurrentAnswerOptionsRandomized(roomCode) {
   let currQuestionNum = games[roomCode].currQuestionNum;
   let answerOptions = games[roomCode].gameQAData[currQuestionNum].incorrect_answers;
@@ -616,10 +651,6 @@ function getCurrentAnswerOptionsRandomized(roomCode) {
     [answerOptions[currIndex], answerOptions[randIndex]] = [answerOptions[randIndex], answerOptions[currIndex]];
   }
   return answerOptions;
-}
-
-function getAnswerResult(roomCode, clientAnswer) {
-
 }
 
 // Start timer at start of round, keep reference in case of reconnect
@@ -651,6 +682,11 @@ function getUsersScores(roomCode) {
     scoresMap[username] = score;
   })
   return scoresMap;
+}
+
+function addToUserScore(roomCode, clientId, points) {
+  // TODO: verify clientId in this room
+  clients[clientId].gameScore = clients[clientId].gameScore + points;
 }
 
 function resetUsersScores(roomCode) {
