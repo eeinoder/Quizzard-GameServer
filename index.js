@@ -672,7 +672,7 @@ function startRoundTimer(roomCode) {
   let timeLeftDs = Math.floor(timeLeftMs/100) / 10;
   timeLeftDs = Math.max(timeLeftDs, 0);
   // Update timekeeping every 0.1s (enough accuracy for timer sync)
-  if (timeLeftDs > 0) {
+  if (timeLeftDs > 0 && rooms[roomCode].gameState === "play") {
     setTimeout(() => {
       startRoundTimer(roomCode);
     }, 100);
