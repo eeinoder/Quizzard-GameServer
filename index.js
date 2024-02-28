@@ -41,7 +41,7 @@ const rooms = {};
 const games = {}; // Game Data: title, questions/answers, current questions
 // e.g. games[gameCode] = {     // NOTE: one game per room at a time, so just make gameCode = roomCode
 //  "gameCode": gameCode,
-//  "gameParams": [gameTitle, gameQuestionNum, gameDifficulty, gameColor],
+//  "gameParams": { "gameTitle":, "gameQuestionNum":, "gameDifficulty":, "gameColor": },
 //  "gameQAData": [],           // Results array from OpenTDB response with question data objects
 //  "timerTime": 10000,         // Time to answer question in ms, default 10s
 //  "currQuestionNum": 0,
@@ -268,7 +268,7 @@ function createGameHandler(result) {
   const roomCode = result.roomCode;
   const gameParams = result.gameParams;
   //let [gameTitle, gameQuestionNum, gameDifficulty, gameColor] = gameParams;
-  let [gameTitle, ...restParams] = gameParams;
+  //let [gameTitle, ...restParams] = gameParams;
   const payLoad = {
     "method": "createGame",
     "gameState": "setup",             // NOTE: default state, change to "join"
@@ -285,7 +285,7 @@ function createGameHandler(result) {
   else {
     // TODO: FIX/REMOVE -- TEMPORARY MEASURE TO ALLOW FOR TESTING WHEN OpenTDB IS DOWN
     // MAYBE HAVE BETTER "OFFLINE" AS FULL FEATURE IN FUTURE
-    if (gameTitle === "GK Offline") {
+    if (gameParams.gameTitle === "GK Offline") {
       console.log("Retreiving local trivia data")
       readLocalTriviaData(gameParams, roomCode);
     }
@@ -489,7 +489,6 @@ function gameResultsHandler(roomCode) {
     "gameData": getCurrentGameData(roomCode),
     "usersScores": getUsersScores(roomCode)
   }
-  console.log("Scores: ", payLoad.usersScores)
   // Send to all clients
   rooms[roomCode].clients.forEach(clientId => {
     clients[clientId].connection.send(JSON.stringify(payLoad));
@@ -608,9 +607,7 @@ function play(roomCode, clientId, answer) {
 /* ------------------------- GAME ACTION HELPERS ------------------------- */
 // NOTE: Make sure to call this only once per round, ONLY by Host
 function incrementCurrQuestion(roomCode) {
-  // TODO: CHANGE GAME PARAMS ARRAY TO OBJECT,
-  // gameParams = {"gameTitle": ..., "questionAmount": ..., "difficulty": ..., "color": ...}
-  let questionAmount = parseInt(games[roomCode].gameParams[1]);
+  let questionAmount = parseInt(games[roomCode].gameParams.gameQuestionNum);
   // Verify there is a next question
   if (games[roomCode].currQuestionNum < questionAmount-1) {
     // Increment question data

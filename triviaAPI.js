@@ -24,14 +24,14 @@ const typeQuestions = "multiple";
 
 
 // TODO: USE SESSION TOKEN
-
+ 
 // Call OpenTDB API
 async function requestNewTriviaGame(gameParams, roomCode) {
   // Define defaults
   //let amount = numQuestions;
   let type = typeQuestions;
   // Parse specified parameters
-  let [category, amount, difficulty, gameColor] = gameParams;
+  let [category, amount, difficulty] = [gameParams.gameTitle, gameParams.gameQuestionNum, gameParams.gameDifficulty];
   difficulty = difficulty.toLowerCase();
   if (difficulty === "any") {
     difficulty = "";
