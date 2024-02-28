@@ -667,12 +667,16 @@ function getCurrentAnswerOptionsRandomized(roomCode) {
 
 // Start timer at start of round, keep reference in case of reconnect
 function startRoundTimer(roomCode) {
+  // Verify that game exists and game state is in "play"
+  if (rooms[roomCode].gameState !== "play" || !(roomCode in games)) {
+    return;
+  }
   // Keep track of time left to 0.1s
   let timeLeftMs = games[roomCode].currTimerEnd - Date.now();
   let timeLeftDs = Math.floor(timeLeftMs/100) / 10;
   timeLeftDs = Math.max(timeLeftDs, 0);
   // Update timekeeping every 0.1s (enough accuracy for timer sync)
-  if (timeLeftDs > 0 && rooms[roomCode].gameState === "play") {
+  if (timeLeftDs > 0 && roomCode in games) {
     setTimeout(() => {
       startRoundTimer(roomCode);
     }, 100);
