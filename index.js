@@ -544,7 +544,7 @@ function createNewGame(triviaDataList, gameParams, roomCode) {
     "gameCode": roomCode,
     "gameParams": gameParams,
     "gameQAData": triviaDataList,
-    "timerTime": 10000,
+    "timerTime": 15000,
     "currQuestionNum": -1,
     "currTimerEnd": 0,
     "currQuestion": "",
