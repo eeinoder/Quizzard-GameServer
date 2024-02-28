@@ -49,7 +49,8 @@ const games = {}; // Game Data: title, questions/answers, current questions
 //  "currQuestion": "...",      // String of currrent question
 //  "currAnswerOptions": [...], // Array with answer options
 //  "clientAnswers": {...},     // Map (object) of clientIds to answer string given for current question
-//  "clientResults": {...}      // Map (object) of clientIds to result, "true"/"false", right or wrong
+//  "clientResults": {...},      // Map (object) of clientIds to result, "true"/"false", right or wrong
+//  "numClientsPlaying": 0
 //}
 const clients = {}; //  Stores client connections (TODO: also, scores, and username(?))
 // e.g. clients[clientId] = {
@@ -105,24 +106,6 @@ wsServer.on("request", request => {
         if (result.method === "chat") {
           chatHandler(result);
         }
-
-        // TODO: (on FE too)
-
-        // Reduce redundant handlers -> all that return game view to load into FE
-
-        // -> getGameView (?)
-
-        // TODO: GAME LOOP EVENTS
-
-        // startGameRoundHandler ...
-
-        // getTimer -> at round start, calculate Date.Now + T + 1 (eg 10s)
-        //      Nn reconnect, return this end time, remaining time calculated
-        //      on client side.
-
-        // getGameResults
-        //       get current and cumulative results
-        //      add "END GAME" header in FE after last question (?)
 
     })
     connectClientResponse(connection);
@@ -424,9 +407,14 @@ function joinGameHandler(result) {
   else if (!(roomCode in games)) {
     payLoad.errMsg = "Game does not exist."
   }
+  // Verify client not already joined in game.
+  else if (clients[clientId].isPlaying) {
+    payLoad.errMsg = "Client already joined."
+  }
   // Add user to game joined list
   else {
     clients[clientId].isPlaying = true;
+    games[roomCode].numClientsPlaying = games[roomCode].numClientsPlaying + 1;
     payLoad.joinedGameClientId = clientId;
     payLoad.joinedGameUser = clientUsername;
     payLoad.joinedGameList = getUsersInGame(roomCode);
@@ -564,7 +552,8 @@ function createNewGame(triviaDataList, gameParams, roomCode) {
     "currCorrectAnswer": "",
     "currAnswerOptions": [],
     "clientAnswers": {},
-    "clientResults": {}
+    "clientResults": {},
+    "numClientsPlaying": 0
   }
   // Update room game state on successful create game
   rooms[roomCode].gameState = "join";
@@ -599,7 +588,7 @@ function play(roomCode, clientId, answer) {
     addToUserScore(roomCode, clientId, games[roomCode].currQuestionValue);
   }
   // If last person answers before time expires, go to results (?)
-  if (Object.keys(games[roomCode].clientAnswers).length === getNumberUsersInGame(roomCode)) {
+  if (Object.keys(games[roomCode].clientAnswers).length === games[roomCode].numClientsPlaying) {
     gameResultsHandler(roomCode);
   }
 }
@@ -632,10 +621,12 @@ function getCurrentGameData(roomCode) {
     "currQuestionNum": games[roomCode].currQuestionNum,
     "currTimerEnd": games[roomCode].currTimerEnd,
     "currQuestion": games[roomCode].currQuestion,
+    "currCorrectAnswer":games[roomCode].currCorrectAnswer,
     "currAnswerOptions": games[roomCode].currAnswerOptions,
     "gameParams": games[roomCode].gameParams,
     "clientAnswers": games[roomCode].clientAnswers,
-    "clientResults": games[roomCode].clientResults
+    "clientResults": games[roomCode].clientResults,
+    "numClientsPlaying": games[roomCode].numClientsPlaying
   }
   return gameData;
 }
@@ -721,16 +712,6 @@ function getUsersInGame(roomCode) {
     usersInGame[username] = isPlaying;
   })
   return usersInGame;
-}
-
-function getNumberUsersInGame(roomCode) {
-  let numUsersInGame = 0;
-  rooms[roomCode].clients.forEach(clientId => {
-    if (clients[clientId].isPlaying) {
-      numUsersInGame++;
-    }
-  })
-  return numUsersInGame;
 }
 
 function resetUsersInGame(roomCode) {
