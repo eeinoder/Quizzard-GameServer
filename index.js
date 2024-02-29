@@ -98,6 +98,9 @@ wsServer.on("request", request => {
         if (result.method === "joinGame") {
           joinGameHandler(result);
         }
+        if (result.method === "leaveGame") {
+          leaveGameHandler(result);
+        }
         // SEND ANSWER METHOD
         if (result.method === "play") {
           playHandler(result);
@@ -211,6 +214,7 @@ function reconnectHandler(result) {
     "usersScores": {},
     "usersInGame": {},
     "gameState": "",
+    "isPlaying": "",
     "gameData": {},
     "errMsg": "Failed to reconnect."
   }
@@ -234,6 +238,7 @@ function reconnectHandler(result) {
     payLoad.usersScores = getUsersScores(roomCode);
     payLoad.usersInGame = getUsersInGame(roomCode);
     payLoad.gameState = rooms[roomCode].gameState;
+    payLoad.isPlaying = clients[originalClientId].isPlaying;
     // Send game data
     if (roomCode in games) {
       payLoad.gameData = getCurrentGameData(roomCode);
@@ -256,6 +261,7 @@ function createGameHandler(result) {
     "method": "createGame",
     "gameState": "setup",             // NOTE: default state, change to "join"
     "joinedUsers": {},
+    "isPlaying": "",
     "usersScores": {},
     "gameData": {},
     "errMsg": "Failed to create game." // NOTE: default err message
@@ -292,6 +298,7 @@ function gameQADataHandler(triviaData, gameParams, roomCode, errMsg="") {
     "method": "createGame",
     "gameState": "setup",             // NOTE: default state, change to "join"
     "joinedUsers": {},
+    "isPlaying": "",
     "usersScores": {},
     "gameData": {},
     "errMsg": "Failed to get trivia data." // NOTE: default err message
@@ -306,6 +313,7 @@ function gameQADataHandler(triviaData, gameParams, roomCode, errMsg="") {
     createNewGame(triviaData.results, gameParams, roomCode);
     payLoad.gameState = rooms[roomCode].gameState;
     payLoad.joinedUsers = getUsersInGame(roomCode);
+    payLoad.isPlaying = false;
     payLoad.usersScores = getUsersScores(roomCode);
     payLoad.gameData = getCurrentGameData(roomCode);
     payLoad.errMsg = "";
@@ -323,6 +331,7 @@ function quitGameHandler(result) {
   const payLoad = {
     "method": "quitGame",
     "gameState": "join",    // Default state if quit game fails
+    "isPlaying": true,
     "errMsg": ""
   }
   // Verify room exists
@@ -341,6 +350,7 @@ function quitGameHandler(result) {
   // Quit game -- Reset users inGame flag, set game state, delete game object
   else {
     quitGame(roomCode);
+    payLoad.isPlaying = clients[clientId].isPlaying;
     payLoad.gameState = rooms[roomCode].gameState;
   }
   // Send to all clients
@@ -393,6 +403,7 @@ function joinGameHandler(result) {
     "joinedGameList": {},
     "joinedGameClientId": "",
     "joinedGameUser": "",
+    "isPlaying": false,
     "errMsg": ""
   }
   // Verify room exists
@@ -413,11 +424,61 @@ function joinGameHandler(result) {
   }
   // Add user to game joined list
   else {
-    clients[clientId].isPlaying = true;
-    games[roomCode].numClientsPlaying = games[roomCode].numClientsPlaying + 1;
+    joinGame(roomCode, clientId);
+    payLoad.isPlaying = clients[clientId].isPlaying;
     payLoad.joinedGameClientId = clientId;
     payLoad.joinedGameUser = clientUsername;
     payLoad.joinedGameList = getUsersInGame(roomCode);
+  }
+  // Send payload to every user if successful, or just requesting client if not
+  if (payLoad.errMsg === "") {
+    rooms[roomCode].clients.forEach(clientId => {
+      clients[clientId].connection.send(JSON.stringify(payLoad));
+    })
+  }
+  else {
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+  }
+}
+
+// Leave Game Handler
+function leaveGameHandler(result) {
+  const clientId = result.clientId;
+  const clientUsername = result.clientUsername;
+  const roomCode = result.roomCode;
+  const payLoad = {
+    "method": "leaveGame",
+    "joinedGameList": {},
+    "leftGameClientId": "",
+    "leftGameUser": "",
+    "buttonColor": "",
+    "isPlaying": true,
+    "errMsg": ""
+  }
+  // Verify room exists
+  if (!(roomCode in rooms)) {
+    payLoad.errMsg = "Invalid roomcode."
+  }
+  // Verify client in this room
+  else if (!(rooms[roomCode].clients.includes(clientId))) {
+    payLoad.errMsg = "Client Id not found."
+  }
+  // Verify game exists
+  else if (!(roomCode in games)) {
+    payLoad.errMsg = "Game does not exist."
+  }
+  // Verify client is joined in game.
+  else if (!clients[clientId].isPlaying) {
+    payLoad.errMsg = "Client not joined."
+  }
+  // Remove user from game joined list
+  else {
+    leaveGame(roomCode, clientId);
+    payLoad.isPlaying = clients[clientId].isPlaying;
+    payLoad.joinedGameList = getUsersInGame(roomCode);
+    payLoad.leftGameClientId = clientId
+    payLoad.leftGameUser = clientUsername;
+    payLoad.buttonColor = games[roomCode].gameParams.gameColor;
   }
   // Send payload to every user if successful, or just requesting client if not
   if (payLoad.errMsg === "") {
@@ -566,6 +627,20 @@ function quitGame(roomCode) {
   delete games[roomCode];
   // Update room game state on successful quit game
   rooms[roomCode].gameState = "setup";
+}
+
+function joinGame(roomCode, clientId) {
+  // Update client isPlaying
+  clients[clientId].isPlaying = true;
+  // Increment numClientsPlaying
+  games[roomCode].numClientsPlaying = games[roomCode].numClientsPlaying + 1;
+}
+
+function leaveGame(roomCode, clientId) {
+  // Update client isPlaying
+  clients[clientId].isPlaying = false;
+  // Decrement numClientsPlaying
+  games[roomCode].numClientsPlaying = games[roomCode].numClientsPlaying - 1;
 }
 
 function startGameRound(roomCode) {
