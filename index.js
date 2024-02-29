@@ -154,9 +154,9 @@ function joinRoomHandler(result) {
     clients[clientId].username = clientUsername;
     rooms[roomCode].clients.push(clientId);
     let usersScores = getUsersScores(roomCode);
-    let usersInGame = getUsersInGame(roomCode);
-    let gameState = rooms[roomCode].gameState;
-    let gameData = [];
+    let usersInGame = getUsersInGame(roomCode); // NOTE: use this instead of gameData value, game doesn't exist yet
+    let gameState = rooms[roomCode].gameState;  //  Can use reference in other responses after gameData created.
+    let gameData = {};
     if (roomCode in games) {
       gameData = getCurrentGameData(roomCode);
     }
@@ -536,7 +536,7 @@ function gameResultsHandler(roomCode) {
     "method": "getResults",
     "gameState": "results",
     "gameData": getCurrentGameData(roomCode),
-    "usersScores": getUsersScores(roomCode)
+    "usersScores": getUsersScores(roomCode),
   }
   // Send to all clients
   rooms[roomCode].clients.forEach(clientId => {
@@ -614,7 +614,8 @@ function createNewGame(triviaDataList, gameParams, roomCode) {
     "currAnswerOptions": [],
     "clientAnswers": {},
     "clientResults": {},
-    "numClientsPlaying": 0
+    "numClientsPlaying": 0,
+    "usersInGame": {}
   }
   // Update room game state on successful create game
   rooms[roomCode].gameState = "join";
@@ -634,6 +635,8 @@ function joinGame(roomCode, clientId) {
   clients[clientId].isPlaying = true;
   // Increment numClientsPlaying
   games[roomCode].numClientsPlaying = games[roomCode].numClientsPlaying + 1;
+  // Update usersInGame value in game object. TODO: be more efficient. Don't overwrite every time.
+  games[roomCode].usersInGame = getUsersInGame(roomCode);
 }
 
 function leaveGame(roomCode, clientId) {
@@ -641,6 +644,8 @@ function leaveGame(roomCode, clientId) {
   clients[clientId].isPlaying = false;
   // Decrement numClientsPlaying
   games[roomCode].numClientsPlaying = games[roomCode].numClientsPlaying - 1;
+  // Update usersInGame value in game object. TODO: be more efficient. Don't overwrite every time.
+  games[roomCode].usersInGame = getUsersInGame(roomCode);
 }
 
 function startGameRound(roomCode) {
@@ -701,7 +706,8 @@ function getCurrentGameData(roomCode) {
     "gameParams": games[roomCode].gameParams,
     "clientAnswers": games[roomCode].clientAnswers,
     "clientResults": games[roomCode].clientResults,
-    "numClientsPlaying": games[roomCode].numClientsPlaying
+    "numClientsPlaying": games[roomCode].numClientsPlaying,
+    "usersInGame": games[roomCode].usersInGame
   }
   return gameData;
 }
