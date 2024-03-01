@@ -36,6 +36,7 @@ const rooms = {};
 //  "roomCode": roomCode,
 //  "hostId": hostId,
 //  "clients": [hostId],
+//  "takenUsernames": {...},    // Usernames must be unique. This used for verfication.
 //  "gameState": "setup"
 //}
 const games = {}; // Game Data: title, questions/answers, current questions
@@ -132,9 +133,11 @@ function createRoomHandler(result) {
     "roomCode": roomCode,
     "hostId": hostId,
     "clients": [hostId],
+    "takenUsernames": {},
     "gameState": "setup"
   }
   clients[hostId].username = clientUsername;
+  rooms[roomCode].takenUsernames[clientUsername] = hostId;
   // Send back roomCode
   let usersScores = getUsersScores(roomCode);
   const payLoad = {
@@ -143,32 +146,54 @@ function createRoomHandler(result) {
     "usersScores": usersScores
   }
   clients[hostId].connection.send(JSON.stringify(payLoad));
+  // TODO: closeDummyConnections();
 }
 
 function joinRoomHandler(result) {
   const clientId = result.clientId;
   const clientUsername = result.clientUsername;
   const roomCode = result.roomCode;
-  // If room found, update paramters and relevant globals
-  if (roomCode in rooms) {
+
+  const payLoad = {
+    "method": "joinRoom",
+    "joinedClientId": "",
+    "joinedClientUsername": "",
+    "usersScores": {},
+    "usersInGame": {},
+    "gameState": "",
+    "gameData": {},
+    "joinErrs": {},
+    "errMsg": "Join Failed"
+  }
+
+  // Verify room exists
+  if (!(roomCode in rooms)) {
+    payLoad.joinErrs["codeErr"] = "Room Not Found";
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+    //clients[clientId].connection.close(); // TODO: CONSIDER USING .CLOSE(CODE,REASON) HERE
+    delete clients[clientId];
+  }
+  // Verify username is unique
+  else if (clientUsername in rooms[roomCode].takenUsernames) {
+    payLoad.joinErrs["nameErr"] = "Username Taken";
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+    //clients[clientId].connection.close(); // TODO: CONSIDER USING .CLOSE(CODE,REASON) HERE
+    delete clients[clientId];
+  }
+  // Otherwise, update paramters and relevant globals
+  else {
     clients[clientId].username = clientUsername;
+    rooms[roomCode].takenUsernames[clientUsername] = clientId;
     rooms[roomCode].clients.push(clientId);
-    let usersScores = getUsersScores(roomCode);
-    let usersInGame = getUsersInGame(roomCode); // NOTE: use this instead of gameData value, game doesn't exist yet
-    let gameState = rooms[roomCode].gameState;  //  Can use reference in other responses after gameData created.
-    let gameData = {};
+    // Build payload
+    payLoad.joinedClientId = clientId;
+    payLoad.joinedClientUsername = clientUsername;
+    payLoad.usersScores = getUsersScores(roomCode);
+    payLoad.usersInGame = getUsersInGame(roomCode); // NOTE: use this instead of gameData value, game doesn't exist yet
+    payLoad.gameState = rooms[roomCode].gameState;  //  Can use reference in other responses after gameData created.
+    payLoad.errMsg = "";
     if (roomCode in games) {
-      gameData = getCurrentGameData(roomCode);
-    }
-    const payLoad = {
-      "method": "joinRoom",
-      "joinedClientId": clientId,
-      "joinedClientUsername": clientUsername,
-      "usersScores": usersScores,
-      "usersInGame": usersInGame,
-      "gameState": gameState,
-      "gameData": gameData,
-      "errMsg": ""
+      payLoad.gameData = getCurrentGameData(roomCode);
     }
     // TODO: SEND LIST OF ALL USERNAMES ON ANY CLIENT JOIN, AND ON RECONNECTS
     rooms[roomCode].clients.forEach(clientId => {
@@ -176,21 +201,6 @@ function joinRoomHandler(result) {
     })
     // TODO: REMOVE -- TESTING
     console.log("Room size: ", rooms[roomCode].clients.length)
-  }
-  else {
-    const payLoad = {
-      "method": "joinRoom",
-      "joinedClientId": "",
-      "joinedClientUsername": "",
-      "usersScores": {},
-      "usersInGame": {},
-      "gameState": "",
-      "gameData": {},
-      "errMsg": "Room Not Found"
-    }
-    clients[clientId].connection.send(JSON.stringify(payLoad));
-    clients[clientId].connection.close(); // TODO: CONSIDER USING .CLOSE(CODE,REASON) HERE
-    delete clients[clientId];
   }
 }
 
@@ -206,25 +216,33 @@ function reconnectHandler(result) {
   // TODO: REMOVE BELOW -- TESTING
   //console.log(`Client ${clientUsername} w/ ID: ${originalClientId} reconnecting w/ tempID: ${tempClientId}`)
   // Verify clientId<->room mapping exists, i.e. prev. client trying to reconnect
-  let recipientClientId = tempClientId;
+  let reconnectingClientId = tempClientId;
   // Send back response
   const payLoad = {
     "method": "reconnect",
-    "recipientClientId": recipientClientId,
+    "reconnectingClientId": reconnectingClientId,
     "usersScores": {},
     "usersInGame": {},
     "gameState": "",
     "isPlaying": "",
     "gameData": {},
-    "errMsg": "Failed to reconnect."
+    "joinErrs": {},
+    "errMsg": "Rejoin failed"
   }
-  // TODO/FIX: RECONNECT BUG HAPPENS HERE, WHEN CLIENTID IS IN SESSION STORAGE
-  // FROM PREVIOUS ROOM SO ROOMCODE IS FOUND BUT OLD CLIENTID IS NOT LINKED
+  // Verify room exists
   if (!(roomCode in rooms)) {
-    payLoad.errMsg = "Invalid roomcode."
+    payLoad.joinErrs["codeErr"] = "Room not found";
+    clients[tempClientId].connection.send(JSON.stringify(payLoad));
   }
+  // Verify client id reference in this room
   else if (!(rooms[roomCode].clients.includes(originalClientId))) {
-    payLoad.errMsg = "Client Id not found."
+    payLoad.joinErrs["nameErr"] = "Connection not found"; // i.e. client if not found
+    clients[tempClientId].connection.send(JSON.stringify(payLoad));
+  }
+  // Verify username is unique if client chose different username than original
+  else if (clientUsername !== clients[originalClientId].username && clientUsername in rooms[roomCode].takenUsernames) {
+    payLoad.joinErrs["nameErr"] = "Username Taken"; // i.e. client if not found
+    clients[tempClientId].connection.send(JSON.stringify(payLoad));
   }
   else {
     // Re-map new client connection to original clientId
@@ -232,8 +250,15 @@ function reconnectHandler(result) {
     payLoad.errMsg = "";
     clients[originalClientId].connection = clients[tempClientId].connection;
     delete clients[tempClientId];
-    recipientClientId = originalClientId;
-    payLoad.recipientClientId = recipientClientId;
+    reconnectingClientId = originalClientId;
+    payLoad.reconnectingClientId = reconnectingClientId;
+    // Update username in case it was changed
+    let oldUserName = clients[originalClientId].username;
+    if (clientUsername !== oldUserName) {
+      clients[originalClientId].username = clientUsername;
+      delete rooms[roomCode].takenUsernames[oldUserName];
+      rooms[roomCode].takenUsernames[clientUsername] = originalClientId;
+    }
     // (Re)send other join-status users' data, game state data
     payLoad.usersScores = getUsersScores(roomCode);
     payLoad.usersInGame = getUsersInGame(roomCode);
@@ -243,11 +268,14 @@ function reconnectHandler(result) {
     if (roomCode in games) {
       payLoad.gameData = getCurrentGameData(roomCode);
     }
-
+    // Send to all clients -> update scores and join lists
+    // For reconnecting client, update current game state and load game data
+    rooms[roomCode].clients.forEach(clientId => {
+      clients[clientId].connection.send(JSON.stringify(payLoad));
+    })
     // TODO: REMOVE -- TESTING
     console.log("Room size: ", rooms[roomCode].clients.length)
   }
-  clients[recipientClientId].connection.send(JSON.stringify(payLoad));
 }
 
 // Create new game
@@ -524,7 +552,6 @@ function playHandler(result) {
 
 // Game Results handler (TODO: add host ability to force results page)
 function gameResultsHandler(roomCode) {
-  console.log("Server: Getting results")
   // TODO: if curr is last question -> handle
   // TODO: return usersscores, already updated in playHandler
   // NOTE: if user fails to answer in time, no entry in clientAnswers or clientResults
@@ -598,8 +625,6 @@ function createNewGame(triviaDataList, gameParams, roomCode) {
   resetUsersInGame(roomCode);
   // Reset user scores
   resetUsersScores(roomCode);
-  // Add host to joined users by default
-  let hostId = rooms[roomCode].hostId;
   // Create new game object in games
   games[roomCode] = {
     "gameCode": roomCode,
@@ -681,11 +706,12 @@ function incrementCurrQuestion(roomCode) {
   if (games[roomCode].currQuestionNum < questionAmount-1) {
     // Increment question data
     games[roomCode].currQuestionNum = games[roomCode].currQuestionNum + 1;
-    console.log("Incr'd question num: ", games[roomCode].currQuestionNum)
     games[roomCode].currQuestion = getCurrentQuestion(roomCode);
     games[roomCode].currCorrectAnswer = getCurrentCorrectAnswer(roomCode);
     games[roomCode].currAnswerOptions = getCurrentAnswerOptionsRandomized(roomCode);
     // Reset client answer/result info
+
+    // TODO: save for all rounds -> make "report cards"
     games[roomCode].clientAnswers = {};
     games[roomCode].clientResults = {};
     // Reset timer end time
@@ -764,14 +790,17 @@ function startRoundTimer(roomCode) {
 // Get map of client username to current score.
 // Send after every new room join and game round to all clients, and after rejoin
 // to reconnecting client.
+
+// TODO: FIX
+// NOTE/BUG: IF USERS HAVE SAME NAME USERNAME
 function getUsersScores(roomCode) {
-  let scoresMap = {};
+  let usersScores = [];
   rooms[roomCode].clients.forEach(clientId => {
     let username = clients[clientId].username;
     let score = clients[clientId].gameScore;
-    scoresMap[username] = score;
+    usersScores.push({"username": username, "score": score});
   })
-  return scoresMap;
+  return usersScores;
 }
 
 function addToUserScore(roomCode, clientId, points) {
@@ -786,11 +815,11 @@ function resetUsersScores(roomCode) {
 }
 
 function getUsersInGame(roomCode) {
-  let usersInGame = {};
+  let usersInGame = [];
   rooms[roomCode].clients.forEach(clientId => {
     let username = clients[clientId].username;
     let isPlaying = clients[clientId].isPlaying;
-    usersInGame[username] = isPlaying;
+    usersInGame.push({"username": username, "isPlaying": isPlaying});
   })
   return usersInGame;
 }
