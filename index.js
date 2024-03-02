@@ -321,6 +321,15 @@ async function readLocalTriviaData(gameParams, roomCode) {
 }
 // OpenTDB Trivia Data Response handler
 function gameQADataHandler(triviaData, gameParams, roomCode, errMsg="") {
+  // Read OpenTDB error response, ordered by index
+  const triviaResponseCodes = [
+    "Success",
+    "No Results",
+    "Invalid Parameter",
+    "Session Token Not Found",
+    "Empty Token Session, No More Questions",
+    "Rate Limit Exceeded"
+  ];
   // Create payLoad
   const payLoad = {
     "method": "createGame",
@@ -334,9 +343,18 @@ function gameQADataHandler(triviaData, gameParams, roomCode, errMsg="") {
   // Fetch request failed, likely a server issue
   if (errMsg !== "") {
     payLoad.errMsg = errMsg;
+    // Send err response to host
+    clients[hostId].connection.send(JSON.stringify(payLoad));
+  }
+  // Received error response from OpenTDB
+  else if (triviaData.response_code !== 0) {
+    // TODO: retry trivia data fetch depending on response code, e.g. with new session token if required.
+    payLoad.errMsg = triviaResponseCodes[triviaData.response_code];
+    // Send err response to host
+    clients[hostId].connection.send(JSON.stringify(payLoad));
   }
   // Successfully got trivia data
-  else if (triviaData.response_code === 0) {
+  else {
     console.log("Server received trivia data")
     createNewGame(triviaData.results, gameParams, roomCode);
     payLoad.gameState = rooms[roomCode].gameState;
@@ -345,11 +363,11 @@ function gameQADataHandler(triviaData, gameParams, roomCode, errMsg="") {
     payLoad.usersScores = getUsersScores(roomCode);
     payLoad.gameData = getCurrentGameData(roomCode);
     payLoad.errMsg = "";
+    // Send to all clients
+    rooms[roomCode].clients.forEach(clientId => {
+      clients[clientId].connection.send(JSON.stringify(payLoad));
+    })
   }
-  // Send to all clients
-  rooms[roomCode].clients.forEach(clientId => {
-    clients[clientId].connection.send(JSON.stringify(payLoad));
-  })
 }
 
 // Quit Game Handler
