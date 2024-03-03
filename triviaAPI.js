@@ -19,17 +19,14 @@ const categories = {"General Knowledge":"9", "Film":"11", "Music":"12", "TV":"14
 "Geography":"22", "History":"23", "Celebrities":"26"};
 const difficulties = ["easy", "medium", "hard", ""];
 // Set default request parameters
-const numQuestions = "50";
 const typeQuestions = "multiple";
 
 
-// TODO: USE SESSION TOKEN
- 
-// Call OpenTDB API
-async function requestNewTriviaGame(gameParams, roomCode) {
+// GET TRIVIA DATA FROM OPEN_TDB
+async function requestNewTriviaGame(gameParams, roomCode, gameSessionToken) {
   // Define defaults
-  //let amount = numQuestions;
   let type = typeQuestions;
+
   // Parse specified parameters
   let [category, amount, difficulty] = [gameParams.gameTitle, gameParams.gameQuestionNum, gameParams.gameDifficulty];
   difficulty = difficulty.toLowerCase();
@@ -37,23 +34,63 @@ async function requestNewTriviaGame(gameParams, roomCode) {
     difficulty = "";
   }
   let categoryCode = categories[category];
-  // Build request url
-  let url = `${triviaBaseURL}/api.php?amount=${amount}&category=${categoryCode}&difficulty=${difficulty}&type=${type}`
+  let token = gameSessionToken;
+
+  // Make new token if necessary
+  if (!token) {
+    let tokenPayload = await requestSessionTokenHelper();
+    // Parse token payload (OpenTDB requet for new game session token)
+    let newToken = tokenPayload.tokenJSON.token;
+    let errResCode = tokenPayload.tokenJSON.response_code;
+    let error = tokenPayload.error;
+    // If nonzero response code
+    if (error || errResCode !== 0) {
+      // TODO: return if error ? test this
+      let emptyJSON = {};
+      gameQADataHandler(emptyJSON, gameParams, roomCode, "", error);
+      return;
+    }
+    else {
+      token = newToken;
+    }
+  }
+
+  // Fetch trivia questions
   if (!(category in categories) || !(difficulties.includes(difficulty))) {
-    alert("Invalid category and/or difficulty parameters given.");
+    let emptyJSON = {};
+    let error = "Invalid category and/or difficulty parameters given.";
+    gameQADataHandler(emptyJSON, gameParams, roomCode, "", error);
+  }
+  else {
+    // Build request url
+    let url = `${triviaBaseURL}/api.php?amount=${amount}&category=${categoryCode}&difficulty=${difficulty}&type=${type}&token=${token}`
+    try {
+      const response = await fetch(url);
+      const rawGameDataJSON = await response.json();
+      gameQADataHandler(rawGameDataJSON, gameParams, roomCode, token); // TODO: handle OpenTDB error reponse codes (0-6, listed below)
+    } catch (error) {
+      let emptyJSON = {};
+      gameQADataHandler(emptyJSON, gameParams, roomCode, "", error);
+    }
+  }
+}
+
+// GET SESSION TOKEN FROM OPEN_TDB
+async function requestSessionTokenHelper() {
+  let tokenPayload = {
+    "tokenJSON": {},
+    "error": ""
   }
   try {
-    /*await fetch(url)
-        .then(resp => resp.json())
-        .then(json => gameQADataHandler(json));*/
-    const response = await fetch(url);
-    const rawGameDataJSON = await response.json();
-    gameQADataHandler(rawGameDataJSON, gameParams, roomCode); // TODO: handle OpenTDB error reponse codes (0-6, listed below)
+    const response = await fetch("https://opentdb.com/api_token.php?command=request");
+    const tokenJSON = await response.json();
+    tokenPayload.tokenJSON = tokenJSON;
+    return tokenPayload; // TODO: handle OpenTDB error reponse codes (0-6, listed below)
   } catch (error) {
-    let emptyJSON = {};
-    gameQADataHandler(emptyJSON, gameParams, roomCode, error);
-    console.log(error); // TODO: handle HTTP error response codes (4XX client error, 5XX server error)
+    //tokenPayload.error = error;
+    tokenPayload.error = "Failed to get game session token. Trivia API Server may be down.";
   }
+  return tokenPayload;
 }
 
 // Export from module

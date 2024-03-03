@@ -37,7 +37,9 @@ const rooms = {};
 //  "hostId": hostId,
 //  "clients": [hostId],
 //  "takenUsernames": {...},    // Usernames must be unique. This used for verfication.
-//  "gameState": "setup"
+//                              // takenUsernames[username] = clientId
+//  "gameState": "setup",
+//  "gameSessionToken": "..."   // Session token for calls to OpenTDB -> no duplicate questions
 //}
 const games = {}; // Game Data: title, questions/answers, current questions
 // e.g. games[gameCode] = {     // NOTE: one game per room at a time, so just make gameCode = roomCode
@@ -134,7 +136,8 @@ function createRoomHandler(result) {
     "hostId": hostId,
     "clients": [hostId],
     "takenUsernames": {},
-    "gameState": "setup"
+    "gameState": "setup",
+    "gameSessionToken": ""
   }
   clients[hostId].username = clientUsername;
   rooms[roomCode].takenUsernames[clientUsername] = hostId;
@@ -283,8 +286,6 @@ function createGameHandler(result) {
   const clientId = result.clientId;
   const roomCode = result.roomCode;
   const gameParams = result.gameParams;
-  //let [gameTitle, gameQuestionNum, gameDifficulty, gameColor] = gameParams;
-  //let [gameTitle, ...restParams] = gameParams;
   const payLoad = {
     "method": "createGame",
     "gameState": "setup",             // NOTE: default state, change to "join"
@@ -302,6 +303,7 @@ function createGameHandler(result) {
   else {
     // TODO: FIX/REMOVE -- TEMPORARY MEASURE TO ALLOW FOR TESTING WHEN OpenTDB IS DOWN
     // MAYBE HAVE BETTER "OFFLINE" AS FULL FEATURE IN FUTURE
+    let gameSessionToken = rooms[roomCode].gameSessionToken;
     if (gameParams.gameTitle === "GK Offline") {
       console.log("Retreiving local trivia data")
       readLocalTriviaData(gameParams, roomCode);
@@ -309,27 +311,26 @@ function createGameHandler(result) {
     else {
       console.log("Fetching OpenTDB trivia data")
       // Request for trivia game data. Response handled in gameQADataHandler.
-      requestNewTriviaGame(gameParams, roomCode);
+
+      // NOTE: USING SESSION TOKENS
+      // If gameSessionToken="", function call below generates new token.
+      // On server-client error (fetching game data or token from requestNewTriviaGame),
+      // reset session token (make empty). Display error. Next create game generates new
+      // Non-zero error response codes either require new token or debuggin -> generate new token.
+      requestNewTriviaGame(gameParams, roomCode, gameSessionToken);
     }
   }
 }
 // Read JSON file with example of opentdb trivia JSON response
 async function readLocalTriviaData(gameParams, roomCode) {
   // Original request url: https://opentdb.com/api.php?amount=50&category=9&difficulty=medium
+  // NOTE: GAME PARAMS JUST BEING PASSES, NOT BEING USED TO GET QUESTIONS
+  // TODO: IMPLEMENT "OFFLINE" WHERE PARAMS DETERMINE WHAT JSON TO READ
   await readFile(new URL("./localTriviaData.json", import.meta.url))
     .then(textData => gameQADataHandler(JSON.parse(textData), gameParams, roomCode));
 }
 // OpenTDB Trivia Data Response handler
-function gameQADataHandler(triviaData, gameParams, roomCode, errMsg="") {
-  // Read OpenTDB error response, ordered by index
-  const triviaResponseCodes = [
-    "Success",
-    "No Results",
-    "Invalid Parameter",
-    "Session Token Not Found",
-    "Empty Token Session, No More Questions",
-    "Rate Limit Exceeded"
-  ];
+function gameQADataHandler(triviaData, gameParams, roomCode, gameSessionToken="", errMsg="") {
   // Create payLoad
   const payLoad = {
     "method": "createGame",
@@ -338,25 +339,48 @@ function gameQADataHandler(triviaData, gameParams, roomCode, errMsg="") {
     "isPlaying": "",
     "usersScores": {},
     "gameData": {},
-    "errMsg": "Failed to get trivia data." // NOTE: default err message
+    "errMsg": "Failed to get questions. Trivia API Server may be down." // NOTE: default err message
   }
+  // Read OpenTDB error response, ordered by index
+  const triviaResponseCodes = [
+    // response_code = 0 -- Continue
+    "Success",
+    // response_code = 1 -- Get new session token
+    "No Results. Try creating a new game.",
+    // response_code = 2 -- FIX ASAP, interal error: host sending request to OpenTDB with invalid parameter
+    "Invalid Game Parameter",
+    // response_code = 3 -- Get new session token
+    "Session Token Not Found. Try creating a new game.",
+    // response_code = 4 -- Get new session token
+    "No More Questions! You may see familiar questions after creating a new game.",
+    // response_code = 5 -- FIX ASAP, interal error: host sending too many requests, > 1 per 5s
+    "Rate Limit Exceeded"
+  ];
+  // If new session token generated, update game session token
+  if (gameSessionToken) {
+    rooms[roomCode].gameSessionToken = gameSessionToken;
+  } 
   // Fetch request failed, likely a server issue
   if (errMsg !== "") {
     payLoad.errMsg = errMsg;
     // Send err response to host
-    clients[hostId].connection.send(JSON.stringify(payLoad));
+    clients[rooms[roomCode].hostId].connection.send(JSON.stringify(payLoad));
+    // Reset game session token
+    rooms[roomCode].gameSessionToken = "";
   }
   // Received error response from OpenTDB
   else if (triviaData.response_code !== 0) {
     // TODO: retry trivia data fetch depending on response code, e.g. with new session token if required.
     payLoad.errMsg = triviaResponseCodes[triviaData.response_code];
     // Send err response to host
-    clients[hostId].connection.send(JSON.stringify(payLoad));
+    clients[rooms[roomCode].hostId].connection.send(JSON.stringify(payLoad));
+    // Reset game session token
+    rooms[roomCode].gameSessionToken = "";
   }
   // Successfully got trivia data
   else {
     console.log("Server received trivia data")
-    createNewGame(triviaData.results, gameParams, roomCode);
+    createNewGame(triviaData.results, gameParams, roomCode); // TODO: update gameSessionToken here, may be same token
     payLoad.gameState = rooms[roomCode].gameState;
     payLoad.joinedUsers = getUsersInGame(roomCode);
     payLoad.isPlaying = false;
