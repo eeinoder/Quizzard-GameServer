@@ -35,7 +35,7 @@ const rooms = {};
 // e.g. room[roomCode] = {
 //  "roomCode": roomCode,
 //  "hostId": hostId,
-//  "clients": [hostId],
+//  "clients": [hostId],        // NOTE: this should really be set/map/object not array
 //  "takenUsernames": {...},    // Usernames must be unique. This used for verfication.
 //                              // takenUsernames[username] = clientId
 //  "gameState": "setup",
@@ -111,6 +111,10 @@ wsServer.on("request", request => {
         // SEND CHAT MESSAGE METHOD
         if (result.method === "chat") {
           chatHandler(result);
+        }
+        // KICK USER METHOD
+        if (result.method === "kickUser") {
+          kickUserHandler(result);
         }
 
     })
@@ -359,7 +363,7 @@ function gameQADataHandler(triviaData, gameParams, roomCode, gameSessionToken=""
   // If new session token generated, update game session token
   if (gameSessionToken) {
     rooms[roomCode].gameSessionToken = gameSessionToken;
-  } 
+  }
   // Fetch request failed, likely a server issue
   if (errMsg !== "") {
     payLoad.errMsg = errMsg;
@@ -636,6 +640,47 @@ function chatHandler(result) {
   })
 }
 
+function kickUserHandler(result) {
+  const roomCode = result.roomCode;
+  const clientId = result.clientId;
+  const kickedUsername = result.kickedUsername;
+  const payLoad = {
+    "method": "kickUser",
+    "kickedUsername": "",
+    "usersScores": [],
+    "joinedGameList": {},
+    "errMsg": "Kicked user failed"
+  }
+  // Verify room exists
+  if (!(roomCode in rooms)) {
+    payLoad.errMsg = "Room not found";
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+  }
+  // Verify host is attempting kick
+  if (clientId !== rooms[roomCode].hostId) {
+    payLoad.errMsg = "Only host can kick users."
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+  }
+  // Verify user is in room (and clientId found ?)
+  if (!(kickedUsername in rooms[roomCode].takenUsernames)) {
+    payLoad.errMsg = "User not found."
+    clients[clientId].connection.send(JSON.stringify(payLoad));
+  }
+  else {
+    // Delete all client references.
+    kickUser(roomCode, kickedUsername);
+    // Build payload
+    payLoad.kickedUsername = kickedUsername;
+    payLoad.usersScores = getUsersScores(roomCode);
+    payLoad.joinedGameList = getUsersInGame(roomCode);
+    payLoad.errMsg = "";
+    // Send payload to all
+    rooms[roomCode].clients.forEach(clientId => {
+      clients[clientId].connection.send(JSON.stringify(payLoad));
+    })
+  }
+}
+
 function connectClientResponse(connection) {
   //generate a new clientId
   const clientId = uuid();
@@ -738,6 +783,22 @@ function play(roomCode, clientId, answer) {
   if (Object.keys(games[roomCode].clientAnswers).length === games[roomCode].numClientsPlaying) {
     gameResultsHandler(roomCode);
   }
+}
+
+function kickUser(roomCode, kickedUsername) {
+  let kickedClientId = rooms[roomCode].takenUsernames[kickedUsername];
+  // Close client's connection
+  clients[kickedClientId].connection.close();
+  // Delete client reference in games. If user is playing, leave game.
+  if (clients[kickedClientId].isPlaying) {
+    leaveGame(roomCode, kickedClientId);
+  }
+  // Delete client reference in rooms.
+  let roomIndex = rooms[roomCode].clients.indexOf(kickedClientId)
+  rooms[roomCode].clients.splice(roomIndex,1);
+  delete rooms[roomCode].takenUsernames[kickedUsername];
+  // Delete client reference in clients.
+  delete clients[kickedClientId];
 }
 
 /* ------------------------- GAME ACTION HELPERS ------------------------- */
